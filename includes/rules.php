@@ -20,7 +20,8 @@ defined( 'ABSPATH' ) || exit;
  * Pluginet loggar in SSO-användare med wp_set_auth_cookie(), inte via
  * authenticate-filtret, så SSO påverkas inte av spärren.
  */
-add_filter( 'authenticate', 'rco_sso_block_password_login', 30 );
+// Sist av alla, så att inget annat plugin kan släppa in kontot efter spärren.
+add_filter( 'authenticate', 'rco_sso_block_password_login', PHP_INT_MAX );
 add_filter( 'allow_password_reset', 'rco_sso_block_password_reset', 10, 2 );
 
 /**
@@ -187,9 +188,11 @@ add_filter( 'rest_pre_dispatch', 'rco_sso_gate_rest_request', 1 );
 /**
  * Är anropet autentiserat med en token från Beaver Builder AI?
  *
- * Läser utfärdaren ur token utan att kontrollera signaturen. Det räcker här:
- * svaret används bara för att neka, och en förfalskad token släpps ändå inte
- * in av Beaver Builder.
+ * Känns igen på fältet wp_user_id, som Beaver Builder kräver i varje token,
+ * eller på utfärdaren. Bara utfärdarens domän räcker inte: BB AI 1.0.3 godtar
+ * även en äldre utfärdare på en annan domän (bb-mcp-connect.info-288.workers.dev).
+ * Token läses utan att signaturen kontrolleras. Det räcker här: svaret används
+ * bara för att neka, och en förfalskad token släpps ändå inte in av Beaver Builder.
  *
  * @return bool
  */
@@ -216,7 +219,13 @@ function rco_sso_is_beaver_builder_token() {
 
 	$parts   = explode( '.', trim( substr( $header, 7 ) ) );
 	$payload = 3 === count( $parts ) ? json_decode( RCO_SSO_Token::b64url_decode( $parts[1] ), true ) : null;
-	$host    = is_array( $payload ) && isset( $payload['iss'] ) && is_string( $payload['iss'] ) ? (string) wp_parse_url( $payload['iss'], PHP_URL_HOST ) : '';
+	if ( ! is_array( $payload ) ) {
+		return false;
+	}
+	if ( isset( $payload['wp_user_id'] ) ) {
+		return true;
+	}
+	$host = isset( $payload['iss'] ) && is_string( $payload['iss'] ) ? (string) wp_parse_url( $payload['iss'], PHP_URL_HOST ) : '';
 
 	return 'wpbeaverbuilder.com' === $host || '.wpbeaverbuilder.com' === substr( $host, -20 );
 }

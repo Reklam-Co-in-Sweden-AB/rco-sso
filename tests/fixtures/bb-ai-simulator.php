@@ -28,7 +28,8 @@ function rco_test_bb_user_from_bearer() {
 	}
 	$parts   = explode( '.', trim( substr( $header, 7 ) ) );
 	$payload = 3 === count( $parts ) ? json_decode( base64_decode( strtr( $parts[1], '-_', '+/' ) ), true ) : null;
-	if ( ! is_array( $payload ) || 'https://connect.wpbeaverbuilder.com' !== ( $payload['iss'] ?? '' ) ) {
+	$issuers = array( 'https://connect.wpbeaverbuilder.com', 'https://bb-mcp-connect.info-288.workers.dev' );
+	if ( ! is_array( $payload ) || ! in_array( $payload['iss'] ?? '', $issuers, true ) ) {
 		return 0;
 	}
 	$user = get_userdata( (int) ( $payload['wp_user_id'] ?? 0 ) );

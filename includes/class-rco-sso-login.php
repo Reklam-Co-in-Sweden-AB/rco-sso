@@ -15,8 +15,11 @@ defined( 'ABSPATH' ) || exit;
  */
 class RCO_SSO_Login {
 
-	const COOKIE_NONCE    = 'rco_sso_c';
-	const COOKIE_REDIRECT = 'rco_sso_to';
+	// Prefixet __Host- gör att webbläsaren bara godtar cookien från sajten själv
+	// (Secure, Path=/, ingen Domain). En annan subdomän på en delad domän som
+	// hemsida.eu kan då inte plantera den.
+	const COOKIE_NONCE    = '__Host-rco_sso_c';
+	const COOKIE_REDIRECT = '__Host-rco_sso_to';
 	const COOKIE_LIFETIME = 600;
 
 	/**
@@ -51,6 +54,16 @@ class RCO_SSO_Login {
 		// Bara GET: en POST hit från en annan sajt ska inte kunna starta en inloggning.
 		if ( 'GET' !== ( isset( $_SERVER['REQUEST_METHOD'] ) ? $_SERVER['REQUEST_METHOD'] : '' ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 			self::fail( 'invalid' );
+		}
+
+		// Starten ska komma från sajtens egen inloggningssida eller från en adress
+		// som personen själv öppnat. En annan webbplats ska inte kunna logga in en
+		// anställd här i bakgrunden. Även "same-site" nekas: på en delad domän
+		// som hemsida.eu är grannens subdomän samma "site". Webbläsare som inte
+		// skickar headern släpps igenom.
+		$fetch_site = isset( $_SERVER['HTTP_SEC_FETCH_SITE'] ) ? strtolower( (string) $_SERVER['HTTP_SEC_FETCH_SITE'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+		if ( '' !== $fetch_site && ! in_array( $fetch_site, array( 'same-origin', 'none' ), true ) ) {
+			self::fail( 'manual', 'start från en annan webbplats (' . sanitize_key( $fetch_site ) . ')' );
 		}
 
 		// Cookien bär hemligheten. state bär hashen av den, och nonce binder ihop
@@ -136,8 +149,9 @@ class RCO_SSO_Login {
 			self::fail( 'invalid', $e->getMessage() );
 		}
 
-		// Varje token får bara användas en gång.
-		$used_key = 'rco_sso_used_' . hash( 'sha256', $token );
+		// Varje token får bara användas en gång. Spärren går på den signerade
+		// delen: signaturens sista tecken kan ändras utan att den blir ogiltig.
+		$used_key = 'rco_sso_used_' . hash( 'sha256', substr( $token, 0, (int) strrpos( $token, '.' ) ) );
 		if ( get_transient( $used_key ) ) {
 			self::fail( 'invalid', 'token redan använd' );
 		}
@@ -226,6 +240,7 @@ class RCO_SSO_Login {
 			'role'    => __( 'Ditt Microsoft-konto saknar en WordPress-roll. Be en administratör om åtkomst.', 'rco-sso' ),
 			'account' => __( 'Kontot kunde inte kopplas. Kontakta en administratör.', 'rco-sso' ),
 			'blocked' => __( 'Ditt konto är spärrat för Reklam & Co:s WordPress-sajter. Kontakta en administratör.', 'rco-sso' ),
+			'manual'  => __( 'Klicka på knappen nedan för att logga in med Reklam & Co.', 'rco-sso' ),
 			'unavailable' => __( 'Inloggningen med Reklam & Co går inte att nå just nu. Försök igen om en stund, eller använd nödkontot.', 'rco-sso' ),
 		);
 		if ( isset( $messages[ $code ] ) ) {
@@ -283,20 +298,19 @@ class RCO_SSO_Login {
 	 * Sätt en cookie för inloggningsflödet.
 	 *
 	 * SameSite=None krävs: svaret kommer som en POST från sso.reklamco.se, och
-	 * med Lax skickar webbläsaren inte cookien. Sökvägen begränsas till wp-login.php.
+	 * med Lax skickar webbläsaren inte cookien. Prefixet __Host- kräver Path=/.
 	 *
 	 * @param string $name    Namn.
 	 * @param string $value   Värde.
 	 * @param int    $expires Utgångstid.
 	 */
 	private static function set_cookie( $name, $value, $expires ) {
-		$path = (string) wp_parse_url( wp_login_url(), PHP_URL_PATH );
 		setcookie(
 			$name,
 			$value,
 			array(
 				'expires'  => $expires,
-				'path'     => '' !== $path ? $path : '/',
+				'path'     => '/',
 				'secure'   => true,
 				'httponly' => true,
 				'samesite' => 'None',

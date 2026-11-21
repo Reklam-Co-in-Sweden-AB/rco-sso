@@ -75,7 +75,7 @@ function start( $redirect = '/wp-admin/profile.php' ) {
 	global $base;
 	$r = http( 'GET', '/wp-login.php?action=rco_sso&redirect_to=' . rawurlencode( $base . $redirect ) );
 	parse_str( (string) parse_url( $r['location'], PHP_URL_QUERY ), $q );
-	return array( 'r' => $r, 'q' => $q, 'cookies' => array_intersect_key( $r['cookies'], array( 'rco_sso_c' => 1, 'rco_sso_to' => 1 ) ) );
+	return array( 'r' => $r, 'q' => $q, 'cookies' => array_intersect_key( $r['cookies'], array( '__Host-rco_sso_c' => 1, '__Host-rco_sso_to' => 1 ) ) );
 }
 
 function callback( $s, $claims, $state = null, $cookies = null ) {
@@ -109,10 +109,10 @@ ok( 302 === $s['r']['status'] && 0 === strpos( $s['r']['location'], 'https://log
 ok( 'id_token' === ( $s['q']['response_type'] ?? '' ) && 'form_post' === ( $s['q']['response_mode'] ?? '' ) && CLIENT === ( $s['q']['client_id'] ?? '' ), 'rätt response_type, response_mode och client_id' );
 ok( 'https://sso.reklamco.se/api/wp-sso/callback' === ( $s['q']['redirect_uri'] ?? '' ) && 'openid profile email' === ( $s['q']['scope'] ?? '' ), 'rätt redirect_uri och scope' );
 ok( 1 === preg_match( '/^127\.0\.0\.1\.[A-Za-z0-9_-]{43}$/', $s['q']['state'] ?? '' ), 'state = värdnamn + cookiens hash', $s['q']['state'] ?? '' );
-$c = $s['r']['setcookie']['rco_sso_c'] ?? '';
-ok( false !== stripos( $c, 'SameSite=None' ) && false !== stripos( $c, 'HttpOnly' ) && false !== stripos( $c, 'secure' ) && false !== stripos( $c, 'path=/wp-login.php' ), 'nonce-cookien har rätt flaggor', $c );
-$c_hash = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['rco_sso_c'], true ) );
-ok( $s['q']['state'] === '127.0.0.1.' . $c_hash && $s['q']['nonce'] !== $s['cookies']['rco_sso_c'] && $s['q']['nonce'] !== $c_hash, 'cookien lämnar aldrig sajten: state bär hashen, nonce något annat' );
+$c = $s['r']['setcookie']['__Host-rco_sso_c'] ?? '';
+ok( false !== stripos( $c, 'SameSite=None' ) && false !== stripos( $c, 'HttpOnly' ) && false !== stripos( $c, 'secure' ) && 1 === preg_match( '/path=\/(;|$)/i', $c ) && false === stripos( $c, 'domain=' ), 'nonce-cookien har rätt flaggor och prefixet __Host-', $c );
+$c_hash = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['__Host-rco_sso_c'], true ) );
+ok( $s['q']['state'] === '127.0.0.1.' . $c_hash && $s['q']['nonce'] !== $s['cookies']['__Host-rco_sso_c'] && $s['q']['nonce'] !== $c_hash, 'cookien lämnar aldrig sajten: state bär hashen, nonce något annat' );
 $r = http( 'POST', '/wp-login.php?action=rco_sso', array() );
 ok( 'invalid' === error_code( $r ), 'start via POST nekas' );
 
@@ -138,6 +138,13 @@ ok( 200 === $r2['status'], 'adminpanelen nås med cookien', (string) $r2['status
 // === 4. Samma token igen ===
 list( $r ) = array( http( 'POST', '/wp-login.php?action=rco_sso_callback', array( 'id_token' => $tok, 'state' => $s['q']['state'] ), $s['cookies'] ) );
 ok( 'invalid' === error_code( $r ), 'återanvänd token nekas', error_code( $r ) );
+// Samma token med ändrade utfyllnadsbitar i signaturens sista tecken: signaturen
+// är fortfarande giltig, men token ska ändå räknas som använd.
+$alfa = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+$tok2 = substr( $tok, 0, -1 ) . $alfa[ strpos( $alfa, substr( $tok, -1 ) ) ^ 1 ];
+$sig_same = RCO_SSO_Token::b64url_decode( substr( strrchr( $tok, '.' ), 1 ) ) === RCO_SSO_Token::b64url_decode( substr( strrchr( $tok2, '.' ), 1 ) );
+$r = http( 'POST', '/wp-login.php?action=rco_sso_callback', array( 'id_token' => $tok2, 'state' => $s['q']['state'] ), $s['cookies'] );
+ok( $tok2 !== $tok && $sig_same && 'invalid' === error_code( $r ), 'återanvänd token med ändrat sista tecken nekas', error_code( $r ) );
 
 // === 5. Ingen cookie ===
 $s2 = start();
@@ -222,10 +229,10 @@ $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), $auth );
 ok( 200 === $r['status'], 'ny SSO-inloggning öppnar kopplingen igen', (string) $r['status'] );
 
 // === 13b. Beaver Builder AI:s molnkoppling (simulator i mu-plugins) ===
-function bb_token( $wp_user_id ) {
+function bb_token( $wp_user_id, $iss = 'https://connect.wpbeaverbuilder.com' ) {
 	global $key;
 	$h = RCO_SSO_Token::b64url_encode( json_encode( array( 'alg' => 'RS256', 'kid' => 'bb' ) ) );
-	$b = RCO_SSO_Token::b64url_encode( json_encode( array( 'iss' => 'https://connect.wpbeaverbuilder.com', 'aud' => 'http://127.0.0.1:8099', 'wp_user_id' => $wp_user_id, 'exp' => time() + 600 ) ) );
+	$b = RCO_SSO_Token::b64url_encode( json_encode( array( 'iss' => $iss, 'aud' => 'http://127.0.0.1:8099', 'wp_user_id' => $wp_user_id, 'exp' => time() + 600 ) ) );
 	openssl_sign( "$h.$b", $sig, $key, OPENSSL_ALGO_SHA256 );
 	return array( 'Authorization: Bearer ' . "$h.$b." . RCO_SSO_Token::b64url_encode( $sig ) );
 }
@@ -235,6 +242,8 @@ $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $uid 
 ok( 200 === $r['status'], 'BB-token för SSO-kopplat konto med färsk inloggning släpps in', $r['status'] . ' ' . substr( $r['body'], 0, 120 ) );
 $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $kund->ID ) );
 ok( 403 === $r['status'] && false !== strpos( $r['body'], 'rco_sso_personal_account_required' ), 'BB-token för kundens administratör nekas', $r['status'] . ' ' . substr( $r['body'], 0, 120 ) );
+$r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $kund->ID, 'https://bb-mcp-connect.info-288.workers.dev' ) );
+ok( 403 === $r['status'] && false !== strpos( $r['body'], 'rco_sso_personal_account_required' ), 'BB-token från den äldre utfärdaren nekas också för kundens administratör', $r['status'] . ' ' . substr( $r['body'], 0, 120 ) );
 update_user_meta( $uid, 'rco_sso_last_login', time() - 31 * DAY_IN_SECONDS );
 update_user_meta( $uid, 'rco_sso_linked', time() - 31 * DAY_IN_SECONDS );
 $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $uid ) );
@@ -337,22 +346,34 @@ $egen = RCO_SSO_Login::own_host();
 
 // Passiv variant: token från en inloggning på en annan sajt (A), uppspelad här med A:s cookie.
 $s = start();
-$c = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['rco_sso_c'], true ) );
+$c = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['__Host-rco_sso_c'], true ) );
 $tok_a = token( array( 'nonce' => RCO_SSO_Login::nonce_for( 'a.kund.se', $c ), 'oid' => 'oid-byran', 'preferred_username' => 'byran@reklamco.se', 'roles' => array( 'wp.admin' ) ) );
 $r = http( 'POST', '/wp-login.php?action=rco_sso_callback', array( 'id_token' => $tok_a, 'state' => "$egen.$c" ), $s['cookies'] );
 ok( 'invalid' === error_code( $r ), 'token från inloggning på en annan sajt godtas inte här (passiv variant)', error_code( $r ) );
 $s = start();
-$c = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['rco_sso_c'], true ) );
+$c = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['__Host-rco_sso_c'], true ) );
 $tok_a = token( array( 'nonce' => RCO_SSO_Login::nonce_for( 'a.kund.se', $c ), 'oid' => 'oid-byran', 'preferred_username' => 'byran@reklamco.se', 'roles' => array( 'wp.admin' ) ) );
 $r = http( 'POST', '/wp-login.php?action=rco_sso_callback', array( 'id_token' => $tok_a, 'state' => "a.kund.se.$c" ), $s['cookies'] );
 ok( 'invalid' === error_code( $r ), 'state för en annan sajt med token bunden till den sajten godtas inte', error_code( $r ) );
 $s = start();
 ok( 0 === strpos( $s['q']['state'], $egen . '.' ) && $s['q']['nonce'] === RCO_SSO_Login::nonce_for( $egen, substr( $s['q']['state'], strlen( $egen ) + 1 ) ), 'nonce binder ihop sajtens värdnamn och cookiens hash i state' );
 
+// Starten godtas bara från sajten själv eller en adress personen själv öppnat.
+foreach ( array( 'cross-site', 'same-site' ) as $varifran ) {
+	$r = http( 'GET', '/wp-login.php?action=rco_sso&redirect_to=' . rawurlencode( $base . '/wp-admin/plugins.php' ), null, array(), array( "Sec-Fetch-Site: $varifran" ) );
+	ok( 'manual' === error_code( $r ) && ! isset( $r['setcookie']['__Host-rco_sso_c'] ) && false === strpos( $r['location'], 'microsoftonline' ), "start från annan webbplats ($varifran) loggar inte in", $r['location'] );
+}
+$r = http( 'GET', '/wp-login.php?action=rco_sso', null, array(), array( 'Sec-Fetch-Site: same-origin' ) );
+ok( false !== strpos( $r['location'], 'login.microsoftonline.com' ), 'start från sajtens egen inloggningssida fungerar' );
+$r = http( 'GET', '/wp-login.php?action=rco_sso', null, array(), array( 'Sec-Fetch-Site: none' ) );
+ok( false !== strpos( $r['location'], 'login.microsoftonline.com' ), 'start från en adress personen själv öppnat fungerar' );
+$r = http( 'GET', '/wp-login.php?rco_sso_error=manual' );
+ok( false !== strpos( $r['body'], 'Klicka på knappen nedan' ), 'meddelandet om att klicka på knappen visas' );
+
 // GET mot callback rör inte cookien.
 $s = start();
 $r = http( 'GET', '/wp-login.php?action=rco_sso_callback', null, $s['cookies'] );
-ok( ! isset( $r['setcookie']['rco_sso_c'] ), 'GET mot callback tar inte bort nonce-cookien' );
+ok( ! isset( $r['setcookie']['__Host-rco_sso_c'] ), 'GET mot callback tar inte bort nonce-cookien' );
 
 // Kopplat konto: e-post och lösenord är låsta, och kontot räknas som personal även med annan adress.
 $r = login_byran();

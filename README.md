@@ -8,7 +8,7 @@ Bakgrund, beslut och designspec finns i det interna repot `rco-sso-docs`.
 
 | Del | Vad |
 |---|---|
-| Inloggning | Knappen "Logga in med Reklam & Co" på wp-login.php. Skickar till Microsoft med en nonce som binder ihop sajtens värdnamn och en cookie: `nonce = sha256("rco-sso-v1|" + värdnamn + "|" + sha256(cookie))`, och `state = värdnamn + "." + sha256(cookie)`. Microsoft signerar noncen. Reläet på `sso.reklamco.se` skickar bara vidare till den sajt noncen är bunden till, och sajten godtar bara en nonce bunden till sig själv och sin cookie. En token från en inloggning på en annan sajt kan alltså inte användas här. |
+| Inloggning | Knappen "Logga in med Reklam & Co" på wp-login.php. Skickar till Microsoft med en nonce som binder ihop sajtens värdnamn och en cookie: `nonce = sha256("rco-sso-v1|" + värdnamn + "|" + sha256(cookie))`, och `state = värdnamn + "." + sha256(cookie)`. Microsoft signerar noncen. Reläet på `sso.reklamco.se` skickar bara vidare till den sajt noncen är bunden till, och sajten godtar bara en nonce bunden till sig själv och sin cookie. En token från en inloggning på en annan sajt kan alltså inte användas här. Cookien har prefixet `__Host-`, så en annan subdomän på en delad domän kan inte plantera den, och starten nekar anrop som kommer från en annan webbplats (`Sec-Fetch-Site`). |
 | Kontroll av token | RS256-signatur mot Microsofts publika nycklar (cachade ett dygn), utfärdare, tenant, mottagare, giltighetstid, ålder högst 10 minuter, nonce och att token bara används en gång. |
 | Vem släpps in | Inloggningsnamnet (UPN, `preferred_username`) slutar på `@reklamco.se` och token har approllen `wp.admin` eller `wp.editor`. Claimet `email` används inte. Åtkomst per kund avgörs i CoWeb. |
 | Konton | Kopplas på Entras `oid`. Kopplade konton räknas alltid som personal, och e-post och lösenord kan inte ändras på dem. Första gången kopplas ett befintligt konto vars e-post är samma som personens UPN, annars skapas ett nytt. Ett konto som redan är kopplat till ett annat `oid` tas aldrig över. |
@@ -16,7 +16,7 @@ Bakgrund, beslut och designspec finns i det interna repot `rco-sso-docs`.
 | Första kopplingen | Lösenordet slumpas om och alla öppna sessioner avslutas. |
 | Lösenord | Personalkonton kan inte logga in med lösenord eller återställa lösenord. |
 | API-åtkomst (MCP) | Applikationslösenord och andra kopplingar utan webbläsarsession gäller bara om kontot har loggat in via SSO de senaste 30 dagarna. |
-| Beaver Builder AI | Molnkopplingens token (från `connect.wpbeaverbuilder.com`) godtas bara för konton som är kopplade till SSO och har loggat in de senaste 30 dagarna. Kontrollen ligger i `rest_pre_dispatch`, eftersom Beaver Builder sätter användaren på vägar som går förbi `determine_current_user`. Kundens konton och byråkontot kan inte användas med molnkopplingen. |
+| Beaver Builder AI | Molnkopplingens token (känns igen på fältet `wp_user_id` eller utfärdaren) godtas bara för konton som är kopplade till SSO och har loggat in de senaste 30 dagarna. Kontrollen ligger i `rest_pre_dispatch`, eftersom Beaver Builder sätter användaren på vägar som går förbi `determine_current_user`. Kundens konton och byråkontot kan inte användas med molnkopplingen. |
 | Applikationslösenord | Personliga konton som är kopplade till SSO får bara använda applikationslösenord på sajter som är markerade som utvecklingssajt i CoWebs register (Inställningar → Sajter), eller när `WP_ENVIRONMENT_TYPE` är `local`. Domänen avgör inte (`hemsida.eu` delas av alla Oderlands kunder), och `development`/`staging` räcker inte eftersom konstanten följer med till produktion. Vid lansering byter sajten domän och stängs automatiskt. Utan lista gäller produktionsreglerna. Byråkontot och kundens konton påverkas inte. |
 | Spärrlista | Inloggning kräver att listan har kunnat hämtas minst en gång. Personer som CoWeb har spärrat (`https://sso.reklamco.se/api/wp-sso/sparrade`) förlorar roll, applikationslösenord och sessioner vid nästa API-anrop, inloggning eller sidvisning, och kan inte logga in. Listan innehåller bara hashar av `oid` och UPN, men de är osaltade och går att räkna fram för den som har en lista över personalens namn. Den cachas i fem minuter. Spärrarna kan bara neka; markeringen av utvecklingssajter öppnar för applikationslösenord. Går den inte att hämta gäller den senast hämtade. Rollen kommer tillbaka vid nästa inloggning när spärren tagits bort. Gäller bara SSO-kopplade konton. |
 | Sessioner | Personal loggas ut efter 10 timmar. |
@@ -81,7 +81,7 @@ php tests/test-token.php
 php tests/test-updater.php
 ```
 
-Hela inloggningen testas mot en lokal WordPress (`tests/test-e2e.php`, 86 tester). En egen testnyckel läggs i transienten för Microsofts nycklar, så inget går mot Microsoft eller CoWeb. Uppsättning:
+Hela inloggningen testas mot en lokal WordPress (`tests/test-e2e.php`, 93 tester). En egen testnyckel läggs i transienten för Microsofts nycklar, så inget går mot Microsoft eller CoWeb. Uppsättning:
 
 1. Ladda ner WordPress, WP-CLI och pluginet SQLite Database Integration, och lägg `db.copy` från pluginet som `wp-content/db.php`.
 2. Länka in pluginet: `ln -s <rco-sso> wp-content/plugins/rco-sso`.
@@ -92,7 +92,7 @@ Hela inloggningen testas mot en lokal WordPress (`tests/test-e2e.php`, 86 tester
 7. Uppdateraren testas mot en låtsas-GitHub i samma mapp: skapa en testnyckel med `php scripts/ny-signeringsnyckel.php <testnyckel>` och sätt `RCO_SSO_RELEASE_PUBLIC_KEY` till den publika, `RCO_SSO_UPDATE_API` till `http://127.0.0.1:8098/release.json` och `RCO_SSO_UPDATE_DOWNLOAD_PREFIX` till `http://127.0.0.1:8098/dl/` i `wp-config.php`.
 8. `php -S 127.0.0.1:8099 -t <wordpress>` och sedan `BLOCKLIST_DIR=<tom mapp> UPDATE_KEY=<testnyckel> php tests/test-e2e.php <wordpress>`.
 
-Senast körd 2026-11-20 mot WordPress 7.1.5 och PHP 8.5: alla 86 gick igenom.
+Senast körd 2026-11-20 mot WordPress 7.1.5 och PHP 8.5: alla 93 gick igenom.
 
 ### Testchecklista på testsajten
 
@@ -114,4 +114,5 @@ Senast körd 2026-11-20 mot WordPress 7.1.5 och PHP 8.5: alla 86 gick igenom.
 
 - Riktiga värden för tenant-id och client-id (när appregistreringen finns).
 - Den riktiga signeringsnyckeln och den första signerade releasen.
+- Bakdörrskonton: en anställd med adminroll kan skapa ett vanligt adminkonto med eget lösenord. Det överlever spärrlistan. Pluginet registrerar inte vilka konton personalen skapar.
 - Om inloggningen visas i WordPress ruta för "logga in igen" i adminpanelen fungerar knappen troligen inte där, eftersom Microsoft inte kan visas i en ram. Behöver provas.
