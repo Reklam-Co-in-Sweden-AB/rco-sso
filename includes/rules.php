@@ -194,11 +194,20 @@ add_filter( 'rest_pre_dispatch', 'rco_sso_gate_rest_request', 1 );
  * @return bool
  */
 function rco_sso_is_beaver_builder_token() {
+	// Samma källor, i samma ordning, som Beaver Builder AI läser headern från.
 	$header = '';
 	foreach ( array( 'HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION' ) as $key ) {
-		if ( ! empty( $_SERVER[ $key ] ) ) {
+		if ( ! empty( $_SERVER[ $key ] ) && '' !== trim( (string) $_SERVER[ $key ] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 			$header = (string) wp_unslash( $_SERVER[ $key ] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 			break;
+		}
+	}
+	if ( '' === $header && function_exists( 'apache_request_headers' ) ) {
+		foreach ( (array) apache_request_headers() as $name => $value ) {
+			if ( 'authorization' === strtolower( (string) $name ) ) {
+				$header = (string) $value;
+				break;
+			}
 		}
 	}
 	if ( 0 !== stripos( $header, 'Bearer ' ) ) {
@@ -288,6 +297,69 @@ function rco_sso_logout_blocked_user() {
 	RCO_SSO_Blocklist::revoke( $user_id );
 	wp_clear_auth_cookie();
 	wp_set_current_user( 0 );
+}
+
+/*
+ * 4c3. E-post och lösenord är låsta på kopplade konton
+ *
+ * Annars kunde personal byta till en privat e-postadress, sätta ett eget
+ * lösenord och få ett konto som överlever avstängningen i Entra. E-posten
+ * uppdateras bara av pluginet självt, från Entra, vid inloggning.
+ */
+add_filter( 'wp_pre_insert_user_data', 'rco_sso_lock_linked_account', 10, 3 );
+add_filter( 'show_password_fields', 'rco_sso_hide_password_fields', 10, 2 );
+add_action( 'user_profile_update_errors', 'rco_sso_profile_errors', 10, 3 );
+
+/**
+ * Behåll e-post och lösenord på kopplade konton, hur ändringen än görs
+ * (profilsidan, REST, WP-CLI eller ett annat plugin).
+ *
+ * @param array    $data    Raden som ska sparas.
+ * @param bool     $update  Uppdatering eller nytt konto.
+ * @param int|null $user_id Användar-id vid uppdatering.
+ * @return array
+ */
+function rco_sso_lock_linked_account( $data, $update, $user_id = null ) {
+	if ( ! $update || ! $user_id || RCO_SSO_Accounts::$syncing || ! get_user_meta( $user_id, 'rco_sso_oid', true ) ) {
+		return $data;
+	}
+	$current = get_userdata( $user_id );
+	if ( $current ) {
+		$data['user_email'] = $current->user_email;
+		$data['user_pass']  = $current->user_pass;
+	}
+	return $data;
+}
+
+/**
+ * Dölj lösenordsfälten i profilen för kopplade konton.
+ *
+ * @param bool    $show Visa fälten.
+ * @param WP_User $user Kontot som visas.
+ * @return bool
+ */
+function rco_sso_hide_password_fields( $show, $user = null ) {
+	return $user instanceof WP_User && get_user_meta( $user->ID, 'rco_sso_oid', true ) ? false : $show;
+}
+
+/**
+ * Säg tydligt till i profilen i stället för att tyst behålla det gamla.
+ *
+ * @param WP_Error $errors Fel.
+ * @param bool     $update Uppdatering.
+ * @param object   $user   Det som ska sparas.
+ */
+function rco_sso_profile_errors( $errors, $update, $user ) {
+	if ( ! $update || empty( $user->ID ) || ! get_user_meta( $user->ID, 'rco_sso_oid', true ) ) {
+		return;
+	}
+	$current = get_userdata( $user->ID );
+	if ( $current && isset( $user->user_email ) && strtolower( $user->user_email ) !== strtolower( $current->user_email ) ) {
+		$errors->add( 'rco_sso_email_locked', __( 'E-postadressen styrs av Microsoft-kontot och kan inte ändras här.', 'rco-sso' ) );
+	}
+	if ( ! empty( $user->user_pass ) ) {
+		$errors->add( 'rco_sso_password_locked', __( 'Kontot loggar in med Microsoft och har inget eget lösenord.', 'rco-sso' ) );
+	}
 }
 
 /*

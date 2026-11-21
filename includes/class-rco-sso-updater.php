@@ -4,8 +4,10 @@
  *
  * Nya versioner hämtas från de publika releaserna i Reklam-Co-in-Sweden-AB/rco-sso.
  * Varje release har två filer: rco-sso.zip och rco-sso.zip.sig. Signaturen är
- * en Ed25519-signatur (base64) av zip-filen, gjord med byråns privata
- * signeringsnyckel. Den publika nyckeln står i RCO_SSO_RELEASE_PUBLIC_KEY.
+ * en Ed25519-signatur (base64) av manifestet "rco-sso|<version>|<sha256 av zip>",
+ * gjord med byråns privata signeringsnyckel. Versionen ingår, så en gammal
+ * signerad zip kan inte publiceras som en ny version (nedgradering). Den
+ * publika nyckeln står i RCO_SSO_RELEASE_PUBLIC_KEY.
  *
  * Pluginet styr inloggningen på alla sajter, så en manipulerad uppdatering vore
  * en väg in överallt. Därför installeras ingenting som inte är signerat, och
@@ -32,7 +34,8 @@ class RCO_SSO_Updater {
 	public static function init() {
 		add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'check_for_update' ) );
 		add_filter( 'plugins_api', array( __CLASS__, 'plugin_info' ), 20, 3 );
-		add_filter( 'upgrader_pre_download', array( __CLASS__, 'verified_download' ), 10, 3 );
+		// Sist, så att inget annat filter kan svara med en osignerad fil för vårt plugin.
+		add_filter( 'upgrader_pre_download', array( __CLASS__, 'verified_download' ), PHP_INT_MAX, 4 );
 	}
 
 	/**
@@ -52,6 +55,17 @@ class RCO_SSO_Updater {
 	public static function has_public_key() {
 		$key = base64_decode( (string) RCO_SSO_RELEASE_PUBLIC_KEY, true );
 		return is_string( $key ) && SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES === strlen( $key );
+	}
+
+	/**
+	 * Manifestet som signeras: version och zip-filens hash.
+	 *
+	 * @param string $version  Version.
+	 * @param string $contents Zip-filens innehåll.
+	 * @return string
+	 */
+	public static function manifest( $version, $contents ) {
+		return 'rco-sso|' . $version . '|' . hash( 'sha256', (string) $contents );
 	}
 
 	/**
@@ -200,14 +214,19 @@ class RCO_SSO_Updater {
 	 * @param object               $upgrader Uppgraderaren.
 	 * @return bool|string|WP_Error
 	 */
-	public static function verified_download( $reply, $package, $upgrader = null ) {
-		if ( false !== $reply ) {
+	public static function verified_download( $reply, $package, $upgrader = null, $hook_extra = array() ) {
+		// Vårt plugin känns igen på namnet i uppgraderingen, och för säkerhets
+		// skull även på filnamnet och adressen. Andra pluginers paket rör vi inte.
+		$name = basename( (string) wp_parse_url( (string) $package, PHP_URL_PATH ) );
+		$ours = ( is_array( $hook_extra ) && isset( $hook_extra['plugin'] ) && self::basename() === $hook_extra['plugin'] )
+			|| self::ZIP_NAME === $name
+			|| self::is_trusted_url( (string) $package );
+		if ( ! $ours ) {
 			return $reply;
 		}
-		// Andra pluginers paket rör vi inte.
-		$name = basename( (string) wp_parse_url( (string) $package, PHP_URL_PATH ) );
-		if ( self::ZIP_NAME !== $name && ! self::is_trusted_url( (string) $package ) ) {
-			return $reply;
+		// Har ett annat filter redan laddat ner något för vårt plugin används det inte.
+		if ( is_string( $reply ) && '' !== $reply && file_exists( $reply ) ) {
+			wp_delete_file( $reply );
 		}
 		// Vårt paket godtas bara om det är exakt den senaste releasen från vårt repo.
 		$release = self::latest_release();
@@ -230,7 +249,7 @@ class RCO_SSO_Updater {
 		$signature    = 200 === (int) wp_remote_retrieve_response_code( $sig_response ) ? (string) wp_remote_retrieve_body( $sig_response ) : '';
 		$contents     = (string) file_get_contents( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 
-		if ( ! self::signature_is_valid( $contents, $signature, RCO_SSO_RELEASE_PUBLIC_KEY ) ) {
+		if ( ! self::signature_is_valid( self::manifest( $release['version'], $contents ), $signature, RCO_SSO_RELEASE_PUBLIC_KEY ) ) {
 			wp_delete_file( $file );
 			error_log( 'rco-sso: uppdatering ' . $release['version'] . ' nekad, signaturen stämmer inte' ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 			return new WP_Error( 'rco_sso_bad_signature', __( 'Uppdateringen av Reklam & Co SSO är inte signerad av Reklam & Co och installeras inte.', 'rco-sso' ) );

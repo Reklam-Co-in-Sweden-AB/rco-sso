@@ -16,6 +16,14 @@ defined( 'ABSPATH' ) || exit;
 class RCO_SSO_Accounts {
 
 	/**
+	 * Satt medan pluginet självt uppdaterar e-post (från Entra). Spärren för
+	 * e-post och lösenord på kopplade konton släpper då igenom ändringen.
+	 *
+	 * @var bool
+	 */
+	public static $syncing = false;
+
+	/**
 	 * Approller i Entra och WordPress-rollen de ger, i prioritetsordning.
 	 */
 	const ROLE_MAP = array(
@@ -90,8 +98,12 @@ class RCO_SSO_Accounts {
 		if ( ! get_user_meta( $user->ID, 'rco_sso_linked', true ) ) {
 			// Första kopplingen: lösenordet slumpas om och gamla sessioner avslutas,
 			// så att ingen som kände till det gamla lösenordet kommer in längre.
+			// Även applikationslösenord som någon kan ha skapat innan kopplingen tas bort.
 			wp_set_password( wp_generate_password( 64, true, true ), $user->ID );
 			WP_Session_Tokens::get_instance( $user->ID )->destroy_all();
+			if ( class_exists( 'WP_Application_Passwords' ) ) {
+				WP_Application_Passwords::delete_all_application_passwords( $user->ID );
+			}
 			update_user_meta( $user->ID, 'rco_sso_linked', time() );
 		}
 		update_user_meta( $user->ID, 'rco_sso_oid', $oid );
@@ -174,8 +186,10 @@ class RCO_SSO_Accounts {
 			$update['display_name'] = $name;
 		}
 		if ( $update ) {
-			$update['ID'] = $user->ID;
+			$update['ID']   = $user->ID;
+			self::$syncing  = true;
 			wp_update_user( $update );
+			self::$syncing  = false;
 		}
 	}
 }

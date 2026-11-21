@@ -108,10 +108,11 @@ $s = start();
 ok( 302 === $s['r']['status'] && 0 === strpos( $s['r']['location'], 'https://login.microsoftonline.com/' . TENANT . '/oauth2/v2.0/authorize?' ), 'start skickar till Microsoft', $s['r']['location'] );
 ok( 'id_token' === ( $s['q']['response_type'] ?? '' ) && 'form_post' === ( $s['q']['response_mode'] ?? '' ) && CLIENT === ( $s['q']['client_id'] ?? '' ), 'rätt response_type, response_mode och client_id' );
 ok( 'https://sso.reklamco.se/api/wp-sso/callback' === ( $s['q']['redirect_uri'] ?? '' ) && 'openid profile email' === ( $s['q']['scope'] ?? '' ), 'rätt redirect_uri och scope' );
-ok( 1 === preg_match( '/^127\.0\.0\.1\.[A-Za-z0-9_-]{22}$/', $s['q']['state'] ?? '' ), 'state = värdnamn + slump', $s['q']['state'] ?? '' );
+ok( 1 === preg_match( '/^127\.0\.0\.1\.[A-Za-z0-9_-]{43}$/', $s['q']['state'] ?? '' ), 'state = värdnamn + cookiens hash', $s['q']['state'] ?? '' );
 $c = $s['r']['setcookie']['rco_sso_c'] ?? '';
 ok( false !== stripos( $c, 'SameSite=None' ) && false !== stripos( $c, 'HttpOnly' ) && false !== stripos( $c, 'secure' ) && false !== stripos( $c, 'path=/wp-login.php' ), 'nonce-cookien har rätt flaggor', $c );
-ok( $s['q']['nonce'] === RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['rco_sso_c'], true ) ) && $s['q']['nonce'] !== $s['cookies']['rco_sso_c'], 'nonce är hashen av cookien, inte cookien' );
+$c_hash = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['rco_sso_c'], true ) );
+ok( $s['q']['state'] === '127.0.0.1.' . $c_hash && $s['q']['nonce'] !== $s['cookies']['rco_sso_c'] && $s['q']['nonce'] !== $c_hash, 'cookien lämnar aldrig sajten: state bär hashen, nonce något annat' );
 $r = http( 'POST', '/wp-login.php?action=rco_sso', array() );
 ok( 'invalid' === error_code( $r ), 'start via POST nekas' );
 
@@ -330,6 +331,68 @@ set_blocklist( array() );
 // === 14. Sessionslängd ===
 ok( 10 * HOUR_IN_SECONDS === apply_filters( 'auth_cookie_expiration', 14 * DAY_IN_SECONDS, $uid, true ), 'personalens session är högst 10 timmar' );
 
+// === 14b. Rättningar efter säkerhetsgranskningen ===
+set_blocklist( array() );
+$egen = RCO_SSO_Login::own_host();
+
+// Passiv variant: token från en inloggning på en annan sajt (A), uppspelad här med A:s cookie.
+$s = start();
+$c = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['rco_sso_c'], true ) );
+$tok_a = token( array( 'nonce' => RCO_SSO_Login::nonce_for( 'a.kund.se', $c ), 'oid' => 'oid-byran', 'preferred_username' => 'byran@reklamco.se', 'roles' => array( 'wp.admin' ) ) );
+$r = http( 'POST', '/wp-login.php?action=rco_sso_callback', array( 'id_token' => $tok_a, 'state' => "$egen.$c" ), $s['cookies'] );
+ok( 'invalid' === error_code( $r ), 'token från inloggning på en annan sajt godtas inte här (passiv variant)', error_code( $r ) );
+$s = start();
+$c = RCO_SSO_Token::b64url_encode( hash( 'sha256', $s['cookies']['rco_sso_c'], true ) );
+$tok_a = token( array( 'nonce' => RCO_SSO_Login::nonce_for( 'a.kund.se', $c ), 'oid' => 'oid-byran', 'preferred_username' => 'byran@reklamco.se', 'roles' => array( 'wp.admin' ) ) );
+$r = http( 'POST', '/wp-login.php?action=rco_sso_callback', array( 'id_token' => $tok_a, 'state' => "a.kund.se.$c" ), $s['cookies'] );
+ok( 'invalid' === error_code( $r ), 'state för en annan sajt med token bunden till den sajten godtas inte', error_code( $r ) );
+$s = start();
+ok( 0 === strpos( $s['q']['state'], $egen . '.' ) && $s['q']['nonce'] === RCO_SSO_Login::nonce_for( $egen, substr( $s['q']['state'], strlen( $egen ) + 1 ) ), 'nonce binder ihop sajtens värdnamn och cookiens hash i state' );
+
+// GET mot callback rör inte cookien.
+$s = start();
+$r = http( 'GET', '/wp-login.php?action=rco_sso_callback', null, $s['cookies'] );
+ok( ! isset( $r['setcookie']['rco_sso_c'] ), 'GET mot callback tar inte bort nonce-cookien' );
+
+// Kopplat konto: e-post och lösenord är låsta, och kontot räknas som personal även med annan adress.
+$r = login_byran();
+$b = fresh_user( 'byran@reklamco.se' );
+$hash_fore = $b->user_pass;
+wp_update_user( array( 'ID' => $b->ID, 'user_email' => 'privat@example.com', 'user_pass' => 'mitt-eget-lösenord' ) );
+$b = fresh_user( 'byran' );
+ok( 'byran@reklamco.se' === $b->user_email && $hash_fore === $b->user_pass, 'kopplat konto: e-post och lösenord går inte att ändra' );
+global $wpdb;
+$wpdb->update( $wpdb->users, array( 'user_email' => 'privat@example.com' ), array( 'ID' => $b->ID ) );
+clean_user_cache( $b->ID );
+ok( rco_sso_is_staff_user( $b->ID ), 'kopplat konto räknas som personal även med privat e-post' );
+wp_set_password( 'mitt-eget-lösenord', $b->ID );
+$r = http( 'POST', '/wp-login.php', array( 'log' => 'byran', 'pwd' => 'mitt-eget-lösenord', 'testcookie' => 1 ), array( 'wordpress_test_cookie' => 'WP%20Cookie%20check' ) );
+ok( 200 === $r['status'] && false !== strpos( $r['body'], 'Personal på Reklam' ), 'kopplat konto med privat e-post kan ändå inte logga in med lösenord', (string) $r['status'] );
+$wpdb->update( $wpdb->users, array( 'user_email' => 'byran@reklamco.se' ), array( 'ID' => $b->ID ) );
+clean_user_cache( $b->ID );
+
+// Första kopplingen tar bort applikationslösenord som fanns innan.
+$forsta = get_userdata( wp_insert_user( array( 'user_login' => 'forsta', 'user_email' => 'forsta@reklamco.se', 'user_pass' => wp_generate_password(), 'role' => 'subscriber' ) ) );
+WP_Application_Passwords::create_new_application_password( $forsta->ID, array( 'name' => 'angriparens' ) );
+$s = start();
+list( $r ) = callback( $s, array( 'oid' => 'oid-forsta', 'preferred_username' => 'forsta@reklamco.se', 'roles' => array( 'wp.editor' ) ) );
+ok( '' === error_code( $r ) && array() === WP_Application_Passwords::get_user_application_passwords( $forsta->ID ), 'första kopplingen tar bort befintliga applikationslösenord', error_code( $r ) );
+
+// Indragen roll tar bort rollen från kontot.
+$s = start();
+list( $r ) = callback( $s, array( 'oid' => 'oid-forsta', 'preferred_username' => 'forsta@reklamco.se', 'roles' => array() ) );
+ok( 'role' === error_code( $r ) && array() === array_values( fresh_user( 'forsta' )->roles ), 'indragen roll tas bort från kontot' );
+wp_delete_user( $forsta->ID );
+
+// Ingen lista har någonsin kunnat hämtas: inloggning nekas.
+set_blocklist( null );
+delete_option( RCO_SSO_Blocklist::LAST_OPTION );
+$r = login_byran();
+ok( 'unavailable' === error_code( $r ), 'utan någon hämtad spärrlista nekas inloggning', error_code( $r ) );
+set_blocklist( array() );
+$r = login_byran();
+ok( '' === error_code( $r ), 'när listan går att hämta fungerar inloggningen igen', error_code( $r ) );
+
 // === 15. Uppdateraren (låtsas-GitHub på port 8098) ===
 // Kräver RCO_SSO_RELEASE_PUBLIC_KEY, RCO_SSO_UPDATE_API och RCO_SSO_UPDATE_DOWNLOAD_PREFIX
 // i wp-config och den privata testnyckeln i UPDATE_KEY (se README).
@@ -340,7 +403,7 @@ $dl       = getenv( 'BLOCKLIST_DIR' ) . '/dl';
 $secret   = base64_decode( trim( file_get_contents( getenv( 'UPDATE_KEY' ) ) ) );
 $zip_data = 'PK-låtsaszip-' . random_bytes( 2000 );
 file_put_contents( "$dl/rco-sso.zip", $zip_data );
-file_put_contents( "$dl/rco-sso.zip.sig", base64_encode( sodium_crypto_sign_detached( $zip_data, $secret ) ) );
+file_put_contents( "$dl/rco-sso.zip.sig", base64_encode( sodium_crypto_sign_detached( RCO_SSO_Updater::manifest( '9.9.9', $zip_data ), $secret ) ) );
 $prefix   = RCO_SSO_UPDATE_DOWNLOAD_PREFIX;
 function set_release( $tag, $zip_url, $sig_url ) {
 	file_put_contents( getenv( 'BLOCKLIST_DIR' ) . '/release.json', json_encode( array(
@@ -369,6 +432,19 @@ file_put_contents( "$dl/rco-sso.zip", $zip_data );
 $fil = RCO_SSO_Updater::verified_download( false, 'https://evil.example/rco-sso.zip' );
 ok( is_wp_error( $fil ) && 'rco_sso_unknown_release' === $fil->get_error_code(), 'vårt filnamn från annan källa installeras inte' );
 ok( false === RCO_SSO_Updater::verified_download( false, 'https://downloads.wordpress.org/plugin/annat.zip' ), 'andra pluginers paket påverkas inte' );
+$fil = RCO_SSO_Updater::verified_download( false, 'https://evil.example/annat-namn.zip', null, array( 'plugin' => RCO_SSO_Updater::basename() ) );
+ok( is_wp_error( $fil ), 'vårt plugin känns igen på namnet i uppgraderingen, även med annat filnamn' );
+$annan = wp_tempnam( 'annan' );
+file_put_contents( $annan, 'osignerat' );
+$fil = RCO_SSO_Updater::verified_download( $annan, $prefix . 'rco-sso.zip', null, array( 'plugin' => RCO_SSO_Updater::basename() ) );
+ok( is_string( $fil ) && $fil !== $annan && file_get_contents( $fil ) === $zip_data && ! file_exists( $annan ), 'en fil från ett annat filter används inte för vårt plugin' );
+if ( is_string( $fil ) ) { @unlink( $fil ); }
+// Nedgradering: en gammal signerad zip publicerad under ett nytt versionsnummer.
+file_put_contents( "$dl/rco-sso.zip.sig", base64_encode( sodium_crypto_sign_detached( RCO_SSO_Updater::manifest( '0.1.0', $zip_data ), $secret ) ) );
+delete_transient( RCO_SSO_Updater::TRANSIENT );
+$fil = RCO_SSO_Updater::verified_download( false, $prefix . 'rco-sso.zip' );
+ok( is_wp_error( $fil ) && 'rco_sso_bad_signature' === $fil->get_error_code(), 'gammal zip under nytt versionsnummer installeras inte' );
+file_put_contents( "$dl/rco-sso.zip.sig", base64_encode( sodium_crypto_sign_detached( RCO_SSO_Updater::manifest( '9.9.9', $zip_data ), $secret ) ) );
 
 set_release( 'v9.9.9', 'https://evil.example/rco-sso.zip', 'https://evil.example/rco-sso.zip.sig' );
 $t = RCO_SSO_Updater::check_for_update( (object) array( 'checked' => array( 'x' => '1' ), 'response' => array() ) );

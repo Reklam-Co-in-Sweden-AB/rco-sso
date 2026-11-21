@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reklam & Co SSO
  * Description: Inloggning med Microsoft Entra ID för Reklam & Co-personal, utan nycklar på sajten. Microsoft signerar, sso.reklamco.se skickar vidare och pluginet kontrollerar.
- * Version: 0.6.0
+ * Version: 0.7.0
  * Requires PHP: 7.4
  * Author: Reklam & Co
  * Update URI: https://github.com/Reklam-Co-in-Sweden-AB/rco-sso
@@ -45,7 +45,7 @@ defined( 'RCO_SSO_BLOCKLIST_URL' ) || define( 'RCO_SSO_BLOCKLIST_URL', 'https://
 /**
  * Version och fil, för uppdateraren.
  */
-const RCO_SSO_VERSION = '0.6.0';
+const RCO_SSO_VERSION = '0.7.0';
 const RCO_SSO_FILE    = __FILE__;
 
 /*
@@ -107,6 +107,10 @@ function rco_sso_is_staff_email( $email ) {
 /**
  * Är användaren ett personalkonto?
  *
+ * Ett konto som någon gång kopplats till SSO räknas alltid som personal, även
+ * om e-postadressen skulle ändras. Annars kunde personal byta till en privat
+ * adress och sätta ett eget lösenord.
+ *
  * @param WP_User|int $user Användare eller användar-id.
  * @return bool
  */
@@ -115,7 +119,8 @@ function rco_sso_is_staff_user( $user ) {
 		$user = get_userdata( (int) $user );
 	}
 
-	return $user instanceof WP_User && rco_sso_is_staff_email( $user->user_email );
+	return $user instanceof WP_User
+		&& ( rco_sso_is_staff_email( $user->user_email ) || '' !== (string) get_user_meta( $user->ID, 'rco_sso_oid', true ) );
 }
 
 require_once __DIR__ . '/includes/class-rco-sso-token.php';

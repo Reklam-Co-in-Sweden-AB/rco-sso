@@ -24,7 +24,7 @@ php tests/test-token.php
 
 DIST=$(mktemp -d)
 git archive --format=zip --prefix=rco-sso/ -o "$DIST/rco-sso.zip" HEAD
-php scripts/signera.php "$DIST/rco-sso.zip" "$KEY"
+php scripts/signera.php "$DIST/rco-sso.zip" "$KEY" "$VERSION"
 
 git tag -a "v$VERSION" -m "rco-sso $VERSION"
 git push -q origin "v$VERSION"

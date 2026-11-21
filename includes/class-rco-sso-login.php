@@ -53,9 +53,14 @@ class RCO_SSO_Login {
 			self::fail( 'invalid' );
 		}
 
+		// Cookien bär hemligheten. state bär hashen av den, och nonce binder ihop
+		// hashen med sajtens värdnamn. Microsoft signerar nonce, så en token kan
+		// bara användas på den sajt där inloggningen startade, och reläet skickar
+		// den bara vidare dit (det kontrollerar nonce mot state).
 		$secret = RCO_SSO_Token::b64url_encode( random_bytes( 32 ) );
-		$nonce  = self::nonce_for( $secret );
-		$state  = self::own_host() . '.' . RCO_SSO_Token::b64url_encode( random_bytes( 16 ) );
+		$host   = self::own_host();
+		$nonce  = self::nonce_for( $host, self::cookie_hash( $secret ) );
+		$state  = $host . '.' . self::cookie_hash( $secret );
 
 		self::set_cookie( self::COOKIE_NONCE, $secret, time() + self::COOKIE_LIFETIME );
 
@@ -86,16 +91,19 @@ class RCO_SSO_Login {
 	public static function callback() {
 		nocache_headers();
 
+		// Bara POST. Ett GET-anrop hit får inte röra cookien, annars kan en
+		// tredje part avbryta en pågående inloggning med en länk.
+		// phpcs:disable WordPress.Security.NonceVerification.Missing -- skyddet är nonce i token, bunden till cookien och sajten.
+		if ( 'POST' !== ( isset( $_SERVER['REQUEST_METHOD'] ) ? $_SERVER['REQUEST_METHOD'] : '' ) || empty( $_POST['id_token'] ) || empty( $_POST['state'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+			self::fail( 'invalid', 'id_token eller state saknas' );
+		}
+
 		// Nonce-cookien läses och tas bort direkt, oavsett hur det går.
 		$secret = isset( $_COOKIE[ self::COOKIE_NONCE ] ) ? (string) wp_unslash( $_COOKIE[ self::COOKIE_NONCE ] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		$target = isset( $_COOKIE[ self::COOKIE_REDIRECT ] ) ? (string) wp_unslash( $_COOKIE[ self::COOKIE_REDIRECT ] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		self::set_cookie( self::COOKIE_NONCE, '', time() - YEAR_IN_SECONDS );
 		self::set_cookie( self::COOKIE_REDIRECT, '', time() - YEAR_IN_SECONDS );
 
-		// phpcs:disable WordPress.Security.NonceVerification.Missing -- skyddet är nonce i token, bunden till cookien.
-		if ( 'POST' !== ( isset( $_SERVER['REQUEST_METHOD'] ) ? $_SERVER['REQUEST_METHOD'] : '' ) || empty( $_POST['id_token'] ) || empty( $_POST['state'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-			self::fail( 'invalid', 'id_token eller state saknas' );
-		}
 		$token = (string) wp_unslash( $_POST['id_token'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		$state = (string) wp_unslash( $_POST['state'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		// phpcs:enable
@@ -105,9 +113,15 @@ class RCO_SSO_Login {
 			self::fail( 'expired', 'nonce-cookien saknas' );
 		}
 
-		$dot = strrpos( $state, '.' );
-		if ( false === $dot || substr( $state, 0, $dot ) !== self::own_host() ) {
-			self::fail( 'invalid', 'state gäller en annan sajt' );
+		$host = self::own_host();
+		if ( ! hash_equals( $host . '.' . self::cookie_hash( $secret ), $state ) ) {
+			self::fail( 'invalid', 'state gäller en annan sajt eller en annan inloggning' );
+		}
+
+		// Inloggning kräver att spärrlistan har kunnat hämtas minst en gång.
+		// Reläet ligger på samma server, så det kostar ingen tillgänglighet.
+		if ( ! RCO_SSO_Blocklist::lists()['known'] ) {
+			self::fail( 'unavailable', 'spärrlistan har aldrig kunnat hämtas' );
 		}
 
 		try {
@@ -115,7 +129,7 @@ class RCO_SSO_Login {
 				$token,
 				strtolower( RCO_SSO_TENANT_ID ),
 				strtolower( RCO_SSO_CLIENT_ID ),
-				self::nonce_for( $secret ),
+				self::nonce_for( $host, self::cookie_hash( $secret ) ),
 				array( __CLASS__, 'keys' )
 			);
 		} catch ( RCO_SSO_Token_Exception $e ) {
@@ -144,6 +158,11 @@ class RCO_SSO_Login {
 
 		$role = RCO_SSO_Accounts::role_from_claims( $claims );
 		if ( null === $role ) {
+			// Rollen är indragen i Entra: ta bort den från ett befintligt konto också.
+			$utan_roll = RCO_SSO_Accounts::find_by_oid( (string) $claims['oid'] );
+			if ( $utan_roll ) {
+				RCO_SSO_Blocklist::revoke( $utan_roll->ID, 'ingen WordPress-roll i token' );
+			}
 			self::fail( 'role', 'ingen WordPress-roll i token' );
 		}
 
@@ -170,6 +189,11 @@ class RCO_SSO_Login {
 		$cached = get_transient( 'rco_sso_jwks' );
 		if ( is_array( $cached ) && ( ! $refresh || get_transient( 'rco_sso_jwks_refetch' ) ) ) {
 			return $cached;
+		}
+		// Hämtas högst var femte minut, även när cachen saknas: annars kan vem som
+		// helst göra varje inloggningsförsök fem sekunder långsamt.
+		if ( ! is_array( $cached ) && get_transient( 'rco_sso_jwks_refetch' ) ) {
+			return array();
 		}
 
 		set_transient( 'rco_sso_jwks_refetch', 1, 5 * MINUTE_IN_SECONDS );
@@ -202,6 +226,7 @@ class RCO_SSO_Login {
 			'role'    => __( 'Ditt Microsoft-konto saknar en WordPress-roll. Be en administratör om åtkomst.', 'rco-sso' ),
 			'account' => __( 'Kontot kunde inte kopplas. Kontakta en administratör.', 'rco-sso' ),
 			'blocked' => __( 'Ditt konto är spärrat för Reklam & Co:s WordPress-sajter. Kontakta en administratör.', 'rco-sso' ),
+			'unavailable' => __( 'Inloggningen med Reklam & Co går inte att nå just nu. Försök igen om en stund, eller använd nödkontot.', 'rco-sso' ),
 		);
 		if ( isset( $messages[ $code ] ) ) {
 			$message .= '<div id="login_error" class="notice notice-error"><p>' . esc_html( $messages[ $code ] ) . '</p></div>';
@@ -224,13 +249,25 @@ class RCO_SSO_Login {
 	}
 
 	/**
-	 * Nonce som skickas till Microsoft: hashen av cookiens hemliga värde.
+	 * Hashen av cookiens hemliga värde. Står i state; själva värdet lämnar aldrig sajten.
 	 *
 	 * @param string $secret Cookiens värde.
 	 * @return string
 	 */
-	private static function nonce_for( $secret ) {
+	private static function cookie_hash( $secret ) {
 		return RCO_SSO_Token::b64url_encode( hash( 'sha256', $secret, true ) );
+	}
+
+	/**
+	 * Nonce som skickas till Microsoft: binder ihop sajtens värdnamn och
+	 * inloggningens cookie. Samma beräkning görs i reläet (CoWeb).
+	 *
+	 * @param string $host        Sajtens värdnamn.
+	 * @param string $cookie_hash Hashen av cookien.
+	 * @return string
+	 */
+	public static function nonce_for( $host, $cookie_hash ) {
+		return RCO_SSO_Token::b64url_encode( hash( 'sha256', 'rco-sso-v1|' . $host . '|' . $cookie_hash, true ) );
 	}
 
 	/**

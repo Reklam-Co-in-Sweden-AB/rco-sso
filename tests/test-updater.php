@@ -36,5 +36,14 @@ check( ! RCO_SSO_Updater::signature_is_valid( $zip, base64_encode( 'för kort' )
 check( ! RCO_SSO_Updater::signature_is_valid( $zip, $sig, '' ), 'tom publik nyckel avvisas' );
 check( ! RCO_SSO_Updater::signature_is_valid( $zip, $sig, base64_encode( 'kort' ) ), 'felaktig publik nyckel avvisas' );
 
+// Manifestet: versionen ingår i det som signeras.
+$m_ny   = RCO_SSO_Updater::manifest( '0.7.0', $zip );
+$m_gml  = RCO_SSO_Updater::manifest( '0.5.0', $zip );
+$sig_ny = base64_encode( sodium_crypto_sign_detached( $m_ny, sodium_crypto_sign_secretkey( $pair ) ) );
+check( 'rco-sso|0.7.0|' . hash( 'sha256', $zip ) === $m_ny, 'manifestet har rätt form' );
+check( RCO_SSO_Updater::signature_is_valid( $m_ny, $sig_ny, $public ), 'signerat manifest godtas' );
+check( ! RCO_SSO_Updater::signature_is_valid( $m_gml, $sig_ny, $public ), 'samma zip under annan version avvisas' );
+check( ! RCO_SSO_Updater::signature_is_valid( RCO_SSO_Updater::manifest( '0.7.0', $zip . 'x' ), $sig_ny, $public ), 'ändrad zip under samma version avvisas' );
+
 echo $fail ? "\n$fail av $n tester misslyckades\n" : "Alla $n tester gick igenom\n";
 exit( $fail ? 1 : 0 );

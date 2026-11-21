@@ -2,9 +2,12 @@
 /**
  * Spärrlistan: personer som inte längre ska komma åt WordPress-sajterna.
  *
- * Listan publiceras av CoWeb på sso.reklamco.se och innehåller bara hashar,
- * så den avslöjar inte vilka som är spärrade. Den kan bara neka, aldrig ge
- * åtkomst. En kapad CoWeb kan därför låsa ute personal men inte logga in.
+ * Listan publiceras av CoWeb på sso.reklamco.se och innehåller bara hashar.
+ * Hasharna är osaltade: den som har en lista över personalens namn eller
+ * kundernas domäner kan räkna fram vilka som står där. Spärrarna kan bara
+ * neka. Utvecklingsmarkeringen (dev_hosts) öppnar däremot för applikations-
+ * lösenord på sajten. CoWeb är dessutom reläet för inloggningen och därmed en
+ * betrodd part: en kapad CoWeb kan mer än att påverka den här listan.
  *
  * Format: {"version":1,"hashes":["<sha256 hex>", ...],"dev_hosts":["<sha256 hex>", ...]}
  * Hash: sha256( "oid:" + oid ) eller sha256( "upn:" + upn ), gemener.
@@ -88,7 +91,7 @@ class RCO_SSO_Blocklist {
 	 *
 	 * @param int $user_id Användar-id.
 	 */
-	public static function revoke( $user_id ) {
+	public static function revoke( $user_id, $reason = 'spärrat enligt spärrlistan' ) {
 		$user = get_userdata( $user_id );
 		if ( ! $user ) {
 			return;
@@ -101,7 +104,7 @@ class RCO_SSO_Blocklist {
 		}
 		WP_Session_Tokens::get_instance( $user_id )->destroy_all();
 		update_user_meta( $user_id, 'rco_sso_blocked', time() );
-		error_log( 'rco-sso: konto ' . $user_id . ' spärrat enligt spärrlistan' ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		error_log( 'rco-sso: åtkomsten för konto ' . $user_id . ' togs bort: ' . $reason ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 	}
 
 	/**
@@ -119,11 +122,13 @@ class RCO_SSO_Blocklist {
 	 * Listorna som uppslagstabeller. Hämtas högst var femte minut.
 	 * Kan de inte hämtas används de senast hämtade.
 	 *
-	 * @return array{blocked: array<string,bool>, dev: array<string,bool>}
+	 * known är false om ingen lista någonsin har kunnat hämtas.
+	 *
+	 * @return array{blocked: array<string,bool>, dev: array<string,bool>, known: bool}
 	 */
 	public static function lists() {
 		$cached = get_transient( self::TRANSIENT );
-		if ( is_array( $cached ) && isset( $cached['blocked'], $cached['dev'] ) ) {
+		if ( is_array( $cached ) && isset( $cached['blocked'], $cached['dev'], $cached['known'] ) ) {
 			return $cached;
 		}
 
@@ -136,7 +141,7 @@ class RCO_SSO_Blocklist {
 
 		// CoWeb svarar inte: använd senaste listan och försök igen om en minut.
 		$last = get_option( self::LAST_OPTION );
-		$last = is_array( $last ) && isset( $last['blocked'], $last['dev'] ) ? $last : array( 'blocked' => array(), 'dev' => array() );
+		$last = is_array( $last ) && isset( $last['blocked'], $last['dev'] ) ? $last + array( 'known' => true ) : array( 'blocked' => array(), 'dev' => array(), 'known' => false );
 		set_transient( self::TRANSIENT, $last, MINUTE_IN_SECONDS );
 		return $last;
 	}
@@ -170,6 +175,7 @@ class RCO_SSO_Blocklist {
 		return array(
 			'blocked' => self::to_set( $body['hashes'] ),
 			'dev'     => self::to_set( $dev ),
+			'known'   => true,
 		);
 	}
 
