@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reklam & Co SSO
  * Description: Inloggning med Microsoft Entra ID för Reklam & Co-personal, utan nycklar på sajten. Microsoft signerar, sso.reklamco.se skickar vidare och pluginet kontrollerar.
- * Version: 0.5.1
+ * Version: 0.6.0
  * Requires PHP: 7.4
  * Author: Reklam & Co
  * Update URI: https://github.com/Reklam-Co-in-Sweden-AB/rco-sso
@@ -41,6 +41,21 @@ defined( 'RCO_SSO_RELAY_URL' ) || define( 'RCO_SSO_RELAY_URL', 'https://sso.rekl
  * Spärrlistan i CoWeb. Bara hashar, och den kan bara neka.
  */
 defined( 'RCO_SSO_BLOCKLIST_URL' ) || define( 'RCO_SSO_BLOCKLIST_URL', 'https://sso.reklamco.se/api/wp-sso/sparrade' );
+
+/**
+ * Version och fil, för uppdateraren.
+ */
+const RCO_SSO_VERSION = '0.6.0';
+const RCO_SSO_FILE    = __FILE__;
+
+/*
+ * Uppdateringar från GitHub. Den publika nyckeln verifierar att en release är
+ * signerad med byråns privata signeringsnyckel. Tom = inga uppdateringar alls.
+ * API-adressen och nedladdningsprefixet kan bara ändras för test.
+ */
+defined( 'RCO_SSO_RELEASE_PUBLIC_KEY' ) || define( 'RCO_SSO_RELEASE_PUBLIC_KEY', '' );
+defined( 'RCO_SSO_UPDATE_API' ) || define( 'RCO_SSO_UPDATE_API', 'https://api.github.com/repos/Reklam-Co-in-Sweden-AB/rco-sso/releases/latest' );
+defined( 'RCO_SSO_UPDATE_DOWNLOAD_PREFIX' ) || define( 'RCO_SSO_UPDATE_DOWNLOAD_PREFIX', 'https://github.com/Reklam-Co-in-Sweden-AB/rco-sso/releases/download/' );
 
 /**
  * Domänen som räknas som personal. Konton med den här domänen måste logga in via SSO.
@@ -108,6 +123,10 @@ require_once __DIR__ . '/includes/class-rco-sso-accounts.php';
 require_once __DIR__ . '/includes/class-rco-sso-blocklist.php';
 require_once __DIR__ . '/includes/class-rco-sso-login.php';
 require_once __DIR__ . '/includes/rules.php';
+require_once __DIR__ . '/includes/class-rco-sso-updater.php';
+
+// Uppdateringar fungerar även innan SSO är konfigurerat.
+RCO_SSO_Updater::init();
 
 if ( rco_sso_is_configured() ) {
 	RCO_SSO_Login::init();

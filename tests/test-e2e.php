@@ -330,5 +330,54 @@ set_blocklist( array() );
 // === 14. Sessionslängd ===
 ok( 10 * HOUR_IN_SECONDS === apply_filters( 'auth_cookie_expiration', 14 * DAY_IN_SECONDS, $uid, true ), 'personalens session är högst 10 timmar' );
 
+// === 15. Uppdateraren (låtsas-GitHub på port 8098) ===
+// Kräver RCO_SSO_RELEASE_PUBLIC_KEY, RCO_SSO_UPDATE_API och RCO_SSO_UPDATE_DOWNLOAD_PREFIX
+// i wp-config och den privata testnyckeln i UPDATE_KEY (se README).
+add_filter( 'http_request_host_is_external', '__return_true' ); // download_url nekar annars 127.0.0.1
+add_filter( 'http_allowed_safe_ports', static function ( $ports ) { return array_merge( $ports, array( 8098 ) ); } ); // och andra portar än 80, 443 och 8080
+$dl       = getenv( 'BLOCKLIST_DIR' ) . '/dl';
+@mkdir( $dl );
+$secret   = base64_decode( trim( file_get_contents( getenv( 'UPDATE_KEY' ) ) ) );
+$zip_data = 'PK-låtsaszip-' . random_bytes( 2000 );
+file_put_contents( "$dl/rco-sso.zip", $zip_data );
+file_put_contents( "$dl/rco-sso.zip.sig", base64_encode( sodium_crypto_sign_detached( $zip_data, $secret ) ) );
+$prefix   = RCO_SSO_UPDATE_DOWNLOAD_PREFIX;
+function set_release( $tag, $zip_url, $sig_url ) {
+	file_put_contents( getenv( 'BLOCKLIST_DIR' ) . '/release.json', json_encode( array(
+		'tag_name' => $tag, 'body' => 'Ändringar', 'html_url' => 'https://github.com/x',
+		'assets'   => array( array( 'name' => 'rco-sso.zip', 'browser_download_url' => $zip_url ), array( 'name' => 'rco-sso.zip.sig', 'browser_download_url' => $sig_url ) ),
+	) ) );
+	delete_transient( RCO_SSO_Updater::TRANSIENT );
+}
+set_release( 'v9.9.9', $prefix . 'rco-sso.zip', $prefix . 'rco-sso.zip.sig' );
+ok( RCO_SSO_Updater::has_public_key(), 'uppdateraren har en publik nyckel' );
+$t = RCO_SSO_Updater::check_for_update( (object) array( 'checked' => array( 'x' => '1' ), 'response' => array() ) );
+$u = $t->response[ RCO_SSO_Updater::basename() ] ?? null;
+ok( $u && '9.9.9' === $u->new_version && $prefix . 'rco-sso.zip' === $u->package, 'nyare version visas som uppdatering' );
+$info = RCO_SSO_Updater::plugin_info( false, 'plugin_information', (object) array( 'slug' => 'rco-sso' ) );
+ok( is_object( $info ) && '9.9.9' === $info->version, 'versionsdetaljer visas' );
+
+$fil = RCO_SSO_Updater::verified_download( false, $prefix . 'rco-sso.zip' );
+ok( is_string( $fil ) && file_get_contents( $fil ) === $zip_data, 'signerad zip laddas ner och godtas', is_wp_error( $fil ) ? $fil->get_error_code() : '' );
+if ( is_string( $fil ) ) { @unlink( $fil ); }
+
+file_put_contents( "$dl/rco-sso.zip", $zip_data . 'manipulerad' );
+$fil = RCO_SSO_Updater::verified_download( false, $prefix . 'rco-sso.zip' );
+ok( is_wp_error( $fil ) && 'rco_sso_bad_signature' === $fil->get_error_code(), 'manipulerad zip installeras inte', is_wp_error( $fil ) ? $fil->get_error_code() : 'godtogs' );
+file_put_contents( "$dl/rco-sso.zip", $zip_data );
+
+$fil = RCO_SSO_Updater::verified_download( false, 'https://evil.example/rco-sso.zip' );
+ok( is_wp_error( $fil ) && 'rco_sso_unknown_release' === $fil->get_error_code(), 'vårt filnamn från annan källa installeras inte' );
+ok( false === RCO_SSO_Updater::verified_download( false, 'https://downloads.wordpress.org/plugin/annat.zip' ), 'andra pluginers paket påverkas inte' );
+
+set_release( 'v9.9.9', 'https://evil.example/rco-sso.zip', 'https://evil.example/rco-sso.zip.sig' );
+$t = RCO_SSO_Updater::check_for_update( (object) array( 'checked' => array( 'x' => '1' ), 'response' => array() ) );
+ok( ! isset( $t->response[ RCO_SSO_Updater::basename() ] ), 'release med nedladdning utanför repot visas inte' );
+
+set_release( 'v' . RCO_SSO_VERSION, $prefix . 'rco-sso.zip', $prefix . 'rco-sso.zip.sig' );
+$t = RCO_SSO_Updater::check_for_update( (object) array( 'checked' => array( 'x' => '1' ), 'response' => array() ) );
+ok( ! isset( $t->response[ RCO_SSO_Updater::basename() ] ), 'samma version ger ingen uppdatering' );
+delete_transient( RCO_SSO_Updater::TRANSIENT );
+
 echo "\n" . ( $fail ? "$fail av $n tester misslyckades" : "Alla $n tester gick igenom" ) . "\n";
 exit( $fail ? 1 : 0 );
