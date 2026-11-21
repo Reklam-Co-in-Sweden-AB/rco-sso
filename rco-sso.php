@@ -53,7 +53,7 @@ const RCO_SSO_FILE    = __FILE__;
  * signerad med byråns privata signeringsnyckel. Tom = inga uppdateringar alls.
  * API-adressen och nedladdningsprefixet kan bara ändras för test.
  */
-defined( 'RCO_SSO_RELEASE_PUBLIC_KEY' ) || define( 'RCO_SSO_RELEASE_PUBLIC_KEY', '' );
+defined( 'RCO_SSO_RELEASE_PUBLIC_KEY' ) || define( 'RCO_SSO_RELEASE_PUBLIC_KEY', 'Sb33fWM/XSRcNV3eUSr/5PbVtwjftXpE90XYoyRolQ8=' );
 defined( 'RCO_SSO_UPDATE_API' ) || define( 'RCO_SSO_UPDATE_API', 'https://api.github.com/repos/Reklam-Co-in-Sweden-AB/rco-sso/releases/latest' );
 defined( 'RCO_SSO_UPDATE_DOWNLOAD_PREFIX' ) || define( 'RCO_SSO_UPDATE_DOWNLOAD_PREFIX', 'https://github.com/Reklam-Co-in-Sweden-AB/rco-sso/releases/download/' );
 
