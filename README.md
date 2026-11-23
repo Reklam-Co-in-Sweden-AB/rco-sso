@@ -1,4 +1,4 @@
-# Reklam & Co SSO 0.7.1
+# Reklam & Co SSO 0.7.2
 
 Plugin som låter Reklam & Co-personal logga in på kundsajter med Microsoft Entra ID, utan någon nyckel eller hemlighet på sajten. Microsoft signerar inloggningen, `sso.reklamco.se` (CoWeb) skickar den vidare och pluginet kontrollerar Microsofts signatur själv.
 
@@ -20,7 +20,7 @@ Bakgrund, beslut och designspec finns i det interna repot `rco-sso-docs`.
 | Applikationslösenord | Personliga konton som är kopplade till SSO får bara använda applikationslösenord på sajter som är markerade som utvecklingssajt i CoWebs register (Inställningar → Sajter), eller när `WP_ENVIRONMENT_TYPE` är `local`. Domänen avgör inte (`hemsida.eu` delas av alla Oderlands kunder), och `development`/`staging` räcker inte eftersom konstanten följer med till produktion. Vid lansering byter sajten domän och stängs automatiskt. Utan lista gäller produktionsreglerna. Byråkontot och kundens konton påverkas inte. |
 | Spärrlista | Inloggning kräver att listan har kunnat hämtas minst en gång. Personer som CoWeb har spärrat (`https://sso.reklamco.se/api/wp-sso/sparrade`) förlorar roll, applikationslösenord och sessioner vid nästa API-anrop, inloggning eller sidvisning, och kan inte logga in. Listan innehåller bara hashar av `oid` och UPN, men de är osaltade och går att räkna fram för den som har en lista över personalens namn. Den cachas i fem minuter. Spärrarna kan bara neka; markeringen av utvecklingssajter öppnar för applikationslösenord. Går den inte att hämta gäller den senast hämtade. Rollen kommer tillbaka vid nästa inloggning när spärren tagits bort. Gäller bara SSO-kopplade konton. |
 | Sessioner | Personal loggas ut efter 10 timmar. |
-| Uppdateringar | Nya versioner hämtas från releaserna i det här repot och installeras bara om releasen är signerad med byråns signeringsnyckel (Ed25519). Det som signeras är `rco-sso|<version>|<sha256 av zip>`, så en gammal zip kan inte publiceras som en ny version. Den publika nyckeln står i `RCO_SSO_RELEASE_PUBLIC_KEY`. Saknas den installeras inga uppdateringar alls. |
+| Uppdateringar | Nya versioner hämtas från releaserna i det här repot och installeras bara om releasen är signerad med byråns signeringsnyckel (Ed25519). Det som signeras är `rco-sso|<version>|<sha256 av zip>`, så en gammal zip kan inte publiceras som en ny version. Den publika nyckeln står i `RCO_SSO_RELEASE_PUBLIC_KEY`. Saknas den installeras inga uppdateringar alls. Saknar servern PHP-tillägget sodium används WordPress eget bibliotek för kontrollen (från 0.7.2). |
 
 Kundernas användare påverkas inte. Pluginet skriver aldrig ut något i sidinnehållet, så Beaver Builder och Gutenberg påverkas inte.
 

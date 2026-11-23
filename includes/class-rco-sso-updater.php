@@ -28,6 +28,11 @@ class RCO_SSO_Updater {
 	const ZIP_NAME  = 'rco-sso.zip';
 	const SIG_NAME  = 'rco-sso.zip.sig';
 
+	// Längderna för Ed25519. De står här som tal, eftersom PHP:s konstanter
+	// SODIUM_* saknas på servrar utan sodium-tillägget.
+	const SIGNATURE_BYTES  = 64;
+	const PUBLIC_KEY_BYTES = 32;
+
 	/**
 	 * Koppla in hookarna.
 	 */
@@ -54,7 +59,25 @@ class RCO_SSO_Updater {
 	 */
 	public static function has_public_key() {
 		$key = base64_decode( (string) RCO_SSO_RELEASE_PUBLIC_KEY, true );
-		return is_string( $key ) && SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES === strlen( $key );
+		return is_string( $key ) && self::PUBLIC_KEY_BYTES === strlen( $key );
+	}
+
+	/**
+	 * Finns funktionen som kontrollerar signaturer?
+	 *
+	 * PHP-tillägget sodium saknas på en del servrar. WordPress har ett eget
+	 * bibliotek med samma funktioner (sodium_compat) som laddas vid behov.
+	 *
+	 * @return bool
+	 */
+	public static function has_sodium() {
+		if ( ! function_exists( 'sodium_crypto_sign_verify_detached' ) && defined( 'WPINC' ) ) {
+			$compat = ABSPATH . WPINC . '/sodium_compat/autoload.php';
+			if ( is_readable( $compat ) ) {
+				require_once $compat;
+			}
+		}
+		return function_exists( 'sodium_crypto_sign_verify_detached' );
 	}
 
 	/**
@@ -79,13 +102,21 @@ class RCO_SSO_Updater {
 	public static function signature_is_valid( $contents, $signature_b64, $public_b64 ) {
 		$signature = base64_decode( trim( (string) $signature_b64 ), true );
 		$public    = base64_decode( (string) $public_b64, true );
-		if ( ! is_string( $signature ) || SODIUM_CRYPTO_SIGN_BYTES !== strlen( $signature ) ) {
+		if ( ! is_string( $signature ) || self::SIGNATURE_BYTES !== strlen( $signature ) ) {
 			return false;
 		}
-		if ( ! is_string( $public ) || SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES !== strlen( $public ) ) {
+		if ( ! is_string( $public ) || self::PUBLIC_KEY_BYTES !== strlen( $public ) ) {
 			return false;
 		}
-		return sodium_crypto_sign_verify_detached( $signature, (string) $contents, $public );
+		// Går signaturen inte att kontrollera godtas den inte.
+		if ( ! self::has_sodium() ) {
+			return false;
+		}
+		try {
+			return true === sodium_crypto_sign_verify_detached( $signature, (string) $contents, $public );
+		} catch ( Throwable $e ) {
+			return false;
+		}
 	}
 
 	/**
@@ -235,6 +266,9 @@ class RCO_SSO_Updater {
 		}
 		if ( ! self::has_public_key() ) {
 			return new WP_Error( 'rco_sso_no_public_key', __( 'Reklam & Co SSO saknar publik signeringsnyckel och installerar inga uppdateringar.', 'rco-sso' ) );
+		}
+		if ( ! self::has_sodium() ) {
+			return new WP_Error( 'rco_sso_no_sodium', __( 'Servern kan inte kontrollera signaturen (sodium saknas), så uppdateringen av Reklam & Co SSO installeras inte.', 'rco-sso' ) );
 		}
 
 		if ( ! function_exists( 'download_url' ) ) {

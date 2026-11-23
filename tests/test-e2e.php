@@ -435,6 +435,21 @@ function set_release( $tag, $zip_url, $sig_url ) {
 }
 set_release( 'v9.9.9', $prefix . 'rco-sso.zip', $prefix . 'rco-sso.zip.sig' );
 ok( RCO_SSO_Updater::has_public_key(), 'uppdateraren har en publik nyckel' );
+// Servrar utan PHP-tillägget sodium: WordPress eget bibliotek i ren PHP ska ge samma svar.
+require_once ABSPATH . WPINC . '/sodium_compat/autoload.php';
+ParagonIE_Sodium_Compat::$disableFallbackForUnitTests = true;
+$man     = RCO_SSO_Updater::manifest( '9.9.9', $zip_data );
+$sig_raw = sodium_crypto_sign_detached( $man, $secret );
+$pub_raw = base64_decode( RCO_SSO_RELEASE_PUBLIC_KEY );
+ok( true === ParagonIE_Sodium_Compat::crypto_sign_verify_detached( $sig_raw, $man, $pub_raw ), 'WordPress eget sodium-bibliotek godtar signaturen' );
+try {
+	$fel = ParagonIE_Sodium_Compat::crypto_sign_verify_detached( $sig_raw, $man . 'x', $pub_raw );
+} catch ( Throwable $e ) {
+	$fel = false;
+}
+ok( false === $fel, 'och avvisar ändrat innehåll' );
+ParagonIE_Sodium_Compat::$disableFallbackForUnitTests = false;
+ok( RCO_SSO_Updater::has_sodium(), 'signaturkontrollen finns att tillgå' );
 $t = RCO_SSO_Updater::check_for_update( (object) array( 'checked' => array( 'x' => '1' ), 'response' => array() ) );
 $u = $t->response[ RCO_SSO_Updater::basename() ] ?? null;
 ok( $u && '9.9.9' === $u->new_version && $prefix . 'rco-sso.zip' === $u->package, 'nyare version visas som uppdatering' );
