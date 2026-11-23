@@ -1,4 +1,4 @@
-# Reklam & Co SSO 0.7.0
+# Reklam & Co SSO 0.7.1
 
 Plugin som låter Reklam & Co-personal logga in på kundsajter med Microsoft Entra ID, utan någon nyckel eller hemlighet på sajten. Microsoft signerar inloggningen, `sso.reklamco.se` (CoWeb) skickar den vidare och pluginet kontrollerar Microsofts signatur själv.
 
@@ -24,14 +24,14 @@ Bakgrund, beslut och designspec finns i det interna repot `rco-sso-docs`.
 
 Kundernas användare påverkas inte. Pluginet skriver aldrig ut något i sidinnehållet, så Beaver Builder och Gutenberg påverkas inte.
 
-Pluginet är avstängt, och lösenordsinloggningen öppen, så länge tenant-id och client-id är nollor i `rco-sso.php` eller `RCO_SSO_DISABLE` är satt.
+Från 0.7.1 står tenant-id och client-id för appregistreringen "Reklam och Co – WordPress" i `rco-sso.php`, så inloggningen är påslagen direkt när pluginet aktiveras. Pluginet stängs av, och lösenordsinloggningen öppnas, om `RCO_SSO_DISABLE` sätts i `wp-config.php`.
 
 ## Installation på en sajt
 
 1. Ta en databasbackup.
 2. Lägg in sajten i CoWebs register (`coweb.wp_sites`). Värdnamnet ska vara exakt det som står i sajtens `home_url`, med eller utan `www`.
-3. Installera pluginet i `wp-content/plugins/rco-sso/` via WP Toolkit och aktivera det.
-4. Skapa ett nödkonto med en adress utanför `@reklamco.se` och lägg lösenordet i byråns lösenordshanterare.
+3. Skapa ett nödkonto med en adress utanför `@reklamco.se` och lägg lösenordet i byråns lösenordshanterare. Gör det före aktiveringen: när pluginet är aktivt kan konton med `@reklamco.se`-adress inte längre logga in med lösenord.
+4. Installera pluginet i `wp-content/plugins/rco-sso/` via WP Toolkit och aktivera det.
 5. Logga in med knappen och kontrollera att rätt roll sätts.
 6. Gå igenom sajtens användare. Gamla delade byråkonton tas bort eller får en `@reklamco.se`-adress. Konton med andra adresser går förbi SSO.
 7. Kör testchecklistan nedan.
@@ -112,7 +112,6 @@ Senast körd 2026-11-20 mot WordPress 7.1.5 och PHP 8.5: alla 93 gick igenom.
 
 ## Kvar till v1.0
 
-- Riktiga värden för tenant-id och client-id (när appregistreringen finns).
-- Den riktiga signeringsnyckeln och den första signerade releasen.
+- Första inloggningen mot den riktiga appregistreringen, på en testsajt.
 - Bakdörrskonton: en anställd med adminroll kan skapa ett vanligt adminkonto med eget lösenord. Det överlever spärrlistan. Pluginet registrerar inte vilka konton personalen skapar.
 - Om inloggningen visas i WordPress ruta för "logga in igen" i adminpanelen fungerar knappen troligen inte där, eftersom Microsoft inte kan visas i en ram. Behöver provas.

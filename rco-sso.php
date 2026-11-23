@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reklam & Co SSO
  * Description: Inloggning med Microsoft Entra ID för Reklam & Co-personal, utan nycklar på sajten. Microsoft signerar, sso.reklamco.se skickar vidare och pluginet kontrollerar.
- * Version: 0.7.0
+ * Version: 0.7.1
  * Requires PHP: 7.4
  * Author: Reklam & Co
  * Update URI: https://github.com/Reklam-Co-in-Sweden-AB/rco-sso
@@ -20,17 +20,17 @@
 defined( 'ABSPATH' ) || exit;
 
 /*
- * Appregistreringen "Reklam & Co – WordPress" i Entra. Inget av värdena är
- * hemligt. Sajten kontrollerar Microsofts signatur, så det finns ingen
- * client secret.
+ * Appregistreringen "Reklam och Co – WordPress" i Entra (Entra tillåter inte
+ * "&" i namnet). Inget av värdena är hemligt. Sajten kontrollerar Microsofts
+ * signatur, så det finns ingen client secret.
  *
- * TODO: Fyll i när appregistreringen är skapad. Så länge värdena är
- * nollor är pluginet avstängt och lösenordsinloggningen öppen.
+ * Är något av värdena nollor är pluginet avstängt och lösenordsinloggningen
+ * öppen.
  */
 // Kan sättas i wp-config.php för test. Den som kan ändra wp-config.php äger
 // redan sajten, så det öppnar inget nytt.
-defined( 'RCO_SSO_TENANT_ID' ) || define( 'RCO_SSO_TENANT_ID', '00000000-0000-0000-0000-000000000000' );
-defined( 'RCO_SSO_CLIENT_ID' ) || define( 'RCO_SSO_CLIENT_ID', '00000000-0000-0000-0000-000000000000' );
+defined( 'RCO_SSO_TENANT_ID' ) || define( 'RCO_SSO_TENANT_ID', '6908d35c-837f-41b4-bea2-ea331ab27dc7' );
+defined( 'RCO_SSO_CLIENT_ID' ) || define( 'RCO_SSO_CLIENT_ID', '248d29cd-2d3a-40a4-a8a4-a0334bf89f60' );
 
 /**
  * Inloggningstjänsten i CoWeb som tar emot svaret från Microsoft.
@@ -45,7 +45,7 @@ defined( 'RCO_SSO_BLOCKLIST_URL' ) || define( 'RCO_SSO_BLOCKLIST_URL', 'https://
 /**
  * Version och fil, för uppdateraren.
  */
-const RCO_SSO_VERSION = '0.7.0';
+const RCO_SSO_VERSION = '0.7.1';
 const RCO_SSO_FILE    = __FILE__;
 
 /*
