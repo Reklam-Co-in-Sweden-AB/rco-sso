@@ -253,6 +253,14 @@ $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $uid 
 ok( 401 === $r['status'] && false !== strpos( $r['body'], 'pausad' ), 'BB-token efter 31 dagar nekas trots att BB sätter användaren direkt', $r['status'] . ' ' . substr( $r['body'], 0, 120 ) );
 update_user_meta( $uid, 'rco_sso_last_login', time() );
 
+// === 13c. Personalkonton går inte att räkna upp utifrån ===
+// $uid = byran@reklamco.se (personal, kopplat). $kund = kundadmin (kundens eget konto).
+$r = http( 'GET', '/?author=' . $uid );
+ok( 404 === $r['status'], 'personalens author-arkiv ger 404 (ingen uppräkning)', (string) $r['status'] );
+ok( false === stripos( $r['body'], 'byran' ) && false === stripos( (string) $r['location'], 'byran' ), 'personalens inloggningsnamn läcker inte via author-arkivet', (string) $r['location'] );
+$r = http( 'GET', '/?author=' . $kund->ID );
+ok( 404 !== $r['status'], 'kundens eget author-arkiv påverkas inte', (string) $r['status'] );
+
 $blocklist_file = getenv( 'BLOCKLIST_DIR' ) . '/sparrade.json';
 function set_blocklist( $hashes, $dev_hosts = array() ) {
 	global $blocklist_file;

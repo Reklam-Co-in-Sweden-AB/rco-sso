@@ -24,6 +24,15 @@ defined( 'ABSPATH' ) || exit;
 add_filter( 'authenticate', 'rco_sso_block_password_login', PHP_INT_MAX );
 add_filter( 'allow_password_reset', 'rco_sso_block_password_reset', 10, 2 );
 
+// 4c. Dölj personalkonton för uppräkning utifrån (author-arkiv och REST).
+//     Personalens inloggningsnamn är adresser på @reklamco.se, och den publika
+//     spärrlistan har osaltade hashar av dem. Kan en utomstående räkna upp
+//     vilka anställda som finns på sajterna går det att lista ut vilka som är
+//     spärrade. Kundens egna konton rörs inte.
+add_action( 'template_redirect', 'rco_sso_block_staff_author_enum', 0 );
+add_filter( 'rest_user_query', 'rco_sso_hide_staff_in_rest', 10, 2 );
+add_filter( 'rest_prepare_user', 'rco_sso_block_single_staff_in_rest', 10, 3 );
+
 /**
  * Stoppa lösenordsinloggning för personalkonton.
  *
@@ -58,6 +67,87 @@ function rco_sso_block_password_reset( $allow, $user_id ) {
 	}
 
 	return $allow;
+}
+
+/**
+ * Visa 404 för ett personalkontos author-arkiv (/?author=ID och /author/slug/).
+ *
+ * Körs före redirect_canonical (prioritet 0), så att /?author=ID inte hinner
+ * omdirigeras till /author/slug/ och avslöja inloggningsnamnet på vägen.
+ * Kundens egna författararkiv påverkas inte.
+ */
+function rco_sso_block_staff_author_enum() {
+	if ( ! rco_sso_is_configured() || ! is_author() ) {
+		return;
+	}
+	$author = get_queried_object();
+	if ( $author instanceof WP_User && rco_sso_is_staff_user( $author ) ) {
+		global $wp_query;
+		$wp_query->set_404();
+		status_header( 404 );
+		nocache_headers();
+	}
+}
+
+/**
+ * Personalens id, för att utesluta dem ur publika REST-listor.
+ *
+ * @return int[]
+ */
+function rco_sso_staff_user_ids() {
+	$oid = get_users(
+		array(
+			'fields'       => 'ID',
+			'meta_key'     => 'rco_sso_oid', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key
+			'meta_compare' => 'EXISTS',
+		)
+	);
+	$epost = get_users(
+		array(
+			'fields'        => 'ID',
+			'search'        => '*@reklamco.se',
+			'search_columns' => array( 'user_email', 'user_login' ),
+		)
+	);
+	return array_values( array_unique( array_map( 'intval', array_merge( $oid, $epost ) ) ) );
+}
+
+/**
+ * Uteslut personalkonton ur /wp-json/wp/v2/users för den som inte får lista användare.
+ *
+ * @param array           $args    Argument till WP_User_Query.
+ * @param WP_REST_Request $request Begäran.
+ * @return array
+ */
+function rco_sso_hide_staff_in_rest( $args, $request ) {
+	if ( ! rco_sso_is_configured() || current_user_can( 'list_users' ) ) {
+		return $args;
+	}
+	$staff = rco_sso_staff_user_ids();
+	if ( $staff ) {
+		$args['exclude'] = array_merge( isset( $args['exclude'] ) ? (array) $args['exclude'] : array(), $staff );
+	}
+	return $args;
+}
+
+/**
+ * Neka direkt uppslag av ett personalkonto via /wp-json/wp/v2/users/ID.
+ *
+ * @param WP_REST_Response $response Svaret.
+ * @param WP_User          $user     Kontot.
+ * @param WP_REST_Request  $request  Begäran.
+ * @return WP_REST_Response|WP_Error
+ */
+function rco_sso_block_single_staff_in_rest( $response, $user, $request ) {
+	// Bara enskilda uppslag (/users/ID), inte listan: listan filtreras med rest_user_query.
+	if ( ! rco_sso_is_configured() || current_user_can( 'list_users' ) ) {
+		return $response;
+	}
+	$route = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+	if ( preg_match( '#/wp/v2/users/\d+$#', $route ) && rco_sso_is_staff_user( $user ) ) {
+		return new WP_Error( 'rest_user_invalid_id', __( 'Ogiltigt användar-id.', 'rco-sso' ), array( 'status' => 404 ) );
+	}
+	return $response;
 }
 
 /*
