@@ -21,8 +21,9 @@ defined( 'ABSPATH' ) || exit;
  * authenticate-filtret, så SSO påverkas inte av spärren.
  */
 // Sist av alla, så att inget annat plugin kan släppa in kontot efter spärren.
-add_filter( 'authenticate', 'rco_sso_block_password_login', PHP_INT_MAX );
+add_filter( 'authenticate', 'rco_sso_block_password_login', PHP_INT_MAX, 3 );
 add_filter( 'allow_password_reset', 'rco_sso_block_password_reset', 10, 2 );
+add_filter( 'lostpassword_user_data', 'rco_sso_hide_staff_from_lostpassword', 10, 1 );
 
 // 4c. Dölj personalkonton för uppräkning utifrån (author-arkiv och REST).
 //     Personalens inloggningsnamn är adresser på @reklamco.se, och den publika
@@ -36,10 +37,15 @@ add_filter( 'rest_prepare_user', 'rco_sso_block_single_staff_in_rest', 10, 3 );
 /**
  * Stoppa lösenordsinloggning för personalkonton.
  *
- * @param WP_User|WP_Error|null $user Resultat från tidigare autentisering.
+ * Rätt lösenord ger en hänvisning till knappen. Fel lösenord ger samma svar
+ * som för ett konto som inte finns, så att inloggningsformuläret inte går
+ * att använda för att ta reda på vilka anställda som har konto på sajten.
+ *
+ * @param WP_User|WP_Error|null $user     Resultat från tidigare autentisering.
+ * @param string                $username Det inskrivna användarnamnet eller adressen.
  * @return WP_User|WP_Error|null
  */
-function rco_sso_block_password_login( $user ) {
+function rco_sso_block_password_login( $user, $username = '' ) {
 	if ( ! rco_sso_is_configured() ) {
 		return $user;
 	}
@@ -51,7 +57,63 @@ function rco_sso_block_password_login( $user ) {
 		);
 	}
 
+	if ( is_wp_error( $user ) && in_array( 'incorrect_password', $user->get_error_codes(), true ) ) {
+		$username = (string) $username;
+		$account  = get_user_by( 'login', $username );
+		if ( ! $account && is_email( $username ) ) {
+			$account = get_user_by( 'email', $username );
+		}
+		if ( $account && rco_sso_is_staff_user( $account ) ) {
+			return rco_sso_unknown_account_error( $username );
+		}
+	}
+
 	return $user;
+}
+
+/**
+ * WordPress eget fel för ett konto som inte finns, med det inskrivna namnet.
+ *
+ * Felet hämtas från WordPress med ett låtsasnamn, så att texten och
+ * översättningen alltid är exakt den som ett okänt konto ger.
+ *
+ * @param string $username Det inskrivna användarnamnet eller adressen.
+ * @return WP_Error
+ */
+function rco_sso_unknown_account_error( $username ) {
+	$fake  = 'rcosso' . strtolower( wp_generate_password( 20, false ) );
+	$error = is_email( $username )
+		? wp_authenticate_email_password( null, $fake . '@invalid.invalid', 'x' )
+		: wp_authenticate_username_password( null, $fake, 'x' );
+
+	$result = new WP_Error();
+	if ( is_wp_error( $error ) ) {
+		foreach ( $error->get_error_codes() as $code ) {
+			foreach ( $error->get_error_messages( $code ) as $message ) {
+				$result->add( $code, str_replace( $fake, esc_html( $username ), $message ) );
+			}
+		}
+	}
+	if ( ! $result->has_errors() ) {
+		$result->add( 'invalid_username', esc_html__( 'Okänt användarnamn eller lösenord.', 'rco-sso' ) );
+	}
+	return $result;
+}
+
+/**
+ * Glömt lösenord: ett personalkonto ser ut som ett konto som inte finns.
+ *
+ * Utan det här svarar WordPress "Lösenordsåterställning är inte tillåten för
+ * denna användare", och det pekar ut just personalkontona.
+ *
+ * @param WP_User|false $user_data Kontot, eller false.
+ * @return WP_User|false
+ */
+function rco_sso_hide_staff_from_lostpassword( $user_data ) {
+	if ( rco_sso_is_configured() && $user_data instanceof WP_User && rco_sso_is_staff_user( $user_data ) ) {
+		return false;
+	}
+	return $user_data;
 }
 
 /**
@@ -113,14 +175,16 @@ function rco_sso_staff_user_ids() {
 }
 
 /**
- * Uteslut personalkonton ur /wp-json/wp/v2/users för den som inte får lista användare.
+ * Uteslut personalkonton ur /wp-json/wp/v2/users för utloggade och för konton som inte
+ * får redigera inlägg. Redaktörer, både personalens och kundens, behöver se
+ * författarna i redigeraren.
  *
  * @param array           $args    Argument till WP_User_Query.
  * @param WP_REST_Request $request Begäran.
  * @return array
  */
 function rco_sso_hide_staff_in_rest( $args, $request ) {
-	if ( ! rco_sso_is_configured() || current_user_can( 'list_users' ) ) {
+	if ( ! rco_sso_is_configured() || current_user_can( 'edit_posts' ) ) {
 		return $args;
 	}
 	$staff = rco_sso_staff_user_ids();
@@ -140,7 +204,7 @@ function rco_sso_hide_staff_in_rest( $args, $request ) {
  */
 function rco_sso_block_single_staff_in_rest( $response, $user, $request ) {
 	// Bara enskilda uppslag (/users/ID), inte listan: listan filtreras med rest_user_query.
-	if ( ! rco_sso_is_configured() || current_user_can( 'list_users' ) ) {
+	if ( ! rco_sso_is_configured() || current_user_can( 'edit_posts' ) ) {
 		return $response;
 	}
 	$route = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';

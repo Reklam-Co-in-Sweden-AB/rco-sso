@@ -215,6 +215,27 @@ ok( 200 === $r['status'] && false !== strpos( $r['body'], 'Personal på Reklam &
 $r = http( 'POST', '/wp-login.php', array( 'log' => 'kundadmin', 'pwd' => 'kundpass123', 'testcookie' => 1 ), array( 'wordpress_test_cookie' => 'WP%20Cookie%20check' ) );
 ok( 302 === $r['status'] && false !== strpos( $r['location'], 'wp-admin' ), 'kundens administratör loggar in med lösenord', (string) $r['status'] );
 
+// === 12b. Formulären avslöjar inte vilka personalkonton som finns ===
+// Felrutan för ett personalkonto ska vara identisk med den för ett konto som inte finns.
+function felruta( $r, $namn ) {
+	$text = preg_match( '/id="login_error"[^>]*>(.*?)<\/div>/s', $r['body'], $m ) ? $m[1] : '(ingen felruta)';
+	return trim( preg_replace( '/\s+/', ' ', str_replace( $namn, 'NAMN', wp_strip_all_tags( $text ) ) ) );
+}
+function logga_in_fel( $namn ) {
+	return felruta( http( 'POST', '/wp-login.php', array( 'log' => $namn, 'pwd' => 'fel-lösenord-1', 'testcookie' => 1 ), array( 'wordpress_test_cookie' => 'WP%20Cookie%20check' ) ), $namn );
+}
+function glomt( $namn ) {
+	return felruta( http( 'POST', '/wp-login.php?action=lostpassword', array( 'user_login' => $namn ) ), $namn );
+}
+$okand = logga_in_fel( 'finnsinte' );
+ok( '(ingen felruta)' !== $okand && $okand === logga_in_fel( 'byran' ), 'fel lösenord för personal ser ut som ett okänt användarnamn', logga_in_fel( 'byran' ) );
+ok( logga_in_fel( 'finnsinte@reklamco.se' ) === logga_in_fel( 'byran@reklamco.se' ), 'fel lösenord med personalens adress ser ut som en okänd adress', logga_in_fel( 'byran@reklamco.se' ) );
+ok( $okand !== logga_in_fel( 'kundadmin' ), 'kundens konto får WordPress vanliga svar vid fel lösenord' );
+$glomt_okand = glomt( 'finnsinte' );
+ok( '(ingen felruta)' !== $glomt_okand && $glomt_okand === glomt( 'byran' ), 'glömt lösenord för personal ser ut som ett okänt konto', glomt( 'byran' ) );
+ok( glomt( 'finnsinte@reklamco.se' ) === glomt( 'byran@reklamco.se' ), 'glömt lösenord med personalens adress ser ut som en okänd adress', glomt( 'byran@reklamco.se' ) );
+ok( '' === (string) fresh_user( 'byran@reklamco.se' )->user_activation_key, 'ingen återställningsnyckel skapas för personalkontot' );
+
 // === 13. 30-dagarsregeln för applikationslösenord ===
 $uid = fresh_user( 'byran@reklamco.se' )->ID;
 list( $app_pass ) = WP_Application_Passwords::create_new_application_password( $uid, array( 'name' => 'MCP-test' ) );
@@ -260,6 +281,26 @@ ok( 404 === $r['status'], 'personalens author-arkiv ger 404 (ingen uppräkning)'
 ok( false === stripos( $r['body'], 'byran' ) && false === stripos( (string) $r['location'], 'byran' ), 'personalens inloggningsnamn läcker inte via author-arkivet', (string) $r['location'] );
 $r = http( 'GET', '/?author=' . $kund->ID );
 ok( 404 !== $r['status'], 'kundens eget author-arkiv påverkas inte', (string) $r['status'] );
+
+// REST: redaktörer ser personalen (behövs i redigeraren), utloggade gör det inte.
+function rest_status( $route, $params = array() ) {
+	$q = new WP_REST_Request( 'GET', $route );
+	foreach ( $params as $k => $v ) {
+		$q->set_param( $k, $v );
+	}
+	$res = rest_do_request( $q );
+	return array( $res->get_status(), $res->get_data() );
+}
+$inlagg = wp_insert_post( array( 'post_title' => 'prov', 'post_status' => 'publish', 'post_author' => $uid ) );
+wp_set_current_user( $uid );
+list( $st ) = rest_status( '/wp/v2/users/' . $uid );
+list( , $lista ) = rest_status( '/wp/v2/users', array( 'who' => 'authors', 'per_page' => 100 ) );
+ok( 200 === $st && in_array( $uid, wp_list_pluck( (array) $lista, 'id' ), true ), 'personal med redaktörsroll ser sitt eget konto och finns i författarlistan', (string) $st );
+wp_set_current_user( 0 );
+list( $st ) = rest_status( '/wp/v2/users/' . $uid );
+list( , $lista ) = rest_status( '/wp/v2/users', array( 'per_page' => 100 ) );
+ok( 404 === $st && ! in_array( $uid, wp_list_pluck( (array) $lista, 'id' ), true ), 'utloggad får inte fram personalkontot i REST, trots publicerat inlägg', (string) $st );
+wp_delete_post( $inlagg, true );
 
 $blocklist_file = getenv( 'BLOCKLIST_DIR' ) . '/sparrade.json';
 function set_blocklist( $hashes, $dev_hosts = array() ) {
