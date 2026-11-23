@@ -120,7 +120,10 @@ ok( 'invalid' === error_code( $r ), 'start via POST nekas' );
 $byran = fresh_user( 'byran@reklamco.se' );
 $old_hash = $byran->user_pass;
 list( $r, $tok ) = callback( $s, array( 'oid' => 'oid-byran', 'preferred_username' => 'Byran@Reklamco.se', 'roles' => array( 'wp.editor' ) ) );
-ok( 302 === $r['status'] && '' === error_code( $r ) && false !== strpos( $r['location'], '/wp-admin/profile.php' ), 'inloggning lyckas och går till redirect_to', $r['location'] . ' ' . error_code( $r ) );
+// Sajten svarar med en sida som går vidare, inte med en omdirigering: annars
+// stoppar Chrome kedjan när målet leder vidare till en annan värd (reläets form-action).
+ok( 200 === $r['status'] && '' === $r['location'] && false !== strpos( $r['body'], '<meta http-equiv="refresh" content="0;url=' . esc_url( $base . '/wp-admin/profile.php' ) . '">' ), 'inloggning lyckas och går till redirect_to', $r['status'] . ' ' . $r['location'] . ' ' . error_code( $r ) );
+ok( false !== stripos( $r['headers'], 'no-store' ) || false !== stripos( $r['headers'], 'no-cache' ), 'sidan efter inloggningen cachas inte' );
 $logged = array_filter( $r['cookies'], function ( $k ) { return 0 === strpos( $k, 'wordpress_logged_in_' ); }, ARRAY_FILTER_USE_KEY );
 ok( (bool) $logged, 'inloggningscookie sätts' );
 $byran = fresh_user( 'byran@reklamco.se' );
@@ -490,6 +493,15 @@ set_release( 'v' . RCO_SSO_VERSION, $prefix . 'rco-sso.zip', $prefix . 'rco-sso.
 $t = RCO_SSO_Updater::check_for_update( (object) array( 'checked' => array( 'x' => '1' ), 'response' => array() ) );
 ok( ! isset( $t->response[ RCO_SSO_Updater::basename() ] ), 'samma version ger ingen uppdatering' );
 delete_transient( RCO_SSO_Updater::TRANSIENT );
+
+// === 16. Sidan efter inloggningen går aldrig till en främmande adress ===
+foreach ( array( 'främmande värd' => 'https://evil.example/stjal', 'html i adressen' => $base . '/wp-admin/"><script>alert(1)</script>' ) as $vad => $mal ) {
+	$r0 = http( 'GET', '/wp-login.php?action=rco_sso&redirect_to=' . rawurlencode( $mal ) );
+	parse_str( (string) parse_url( $r0['location'], PHP_URL_QUERY ), $q0 );
+	$s0 = array( 'r' => $r0, 'q' => $q0, 'cookies' => array_intersect_key( $r0['cookies'], array( '__Host-rco_sso_c' => 1, '__Host-rco_sso_to' => 1 ) ) );
+	list( $r ) = callback( $s0, array( 'oid' => 'oid-vidare', 'preferred_username' => 'vidare@reklamco.se', 'roles' => array( 'wp.editor' ) ) );
+	ok( 200 === $r['status'] && false === strpos( $r['body'], 'evil.example' ) && false === stripos( $r['body'], '<script' ) && 1 === preg_match( '/content="0;url=http:\/\/127\.0\.0\.1:8099\/wp-admin\/[^"<>]*">/', $r['body'] ), "vidare efter inloggning ($vad) stannar på sajten", substr( $r['body'], 0, 300 ) );
+}
 
 echo "\n" . ( $fail ? "$fail av $n tester misslyckades" : "Alla $n tester gick igenom" ) . "\n";
 exit( $fail ? 1 : 0 );

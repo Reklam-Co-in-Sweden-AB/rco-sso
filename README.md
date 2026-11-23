@@ -1,4 +1,4 @@
-# Reklam & Co SSO 0.7.2
+# Reklam & Co SSO 0.7.3
 
 Plugin som låter Reklam & Co-personal logga in på kundsajter med Microsoft Entra ID, utan någon nyckel eller hemlighet på sajten. Microsoft signerar inloggningen, `sso.reklamco.se` (CoWeb) skickar den vidare och pluginet kontrollerar Microsofts signatur själv.
 

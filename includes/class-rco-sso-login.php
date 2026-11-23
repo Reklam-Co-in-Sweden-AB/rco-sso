@@ -189,7 +189,33 @@ class RCO_SSO_Login {
 		wp_set_auth_cookie( $user->ID, false, is_ssl() );
 		do_action( 'wp_login', $user->user_login, $user ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- WordPress egen hook, för loggplugin.
 
-		wp_safe_redirect( wp_validate_redirect( $target, admin_url() ) );
+		self::continue_to( wp_validate_redirect( $target, admin_url() ) );
+	}
+
+	/**
+	 * Gå vidare efter inloggningen med en sida i stället för en omdirigering.
+	 *
+	 * Inloggningen kommer hit som ett formulär från reläet, och reläets CSP
+	 * tillåter bara att formuläret går till den här sajten. Chrome tillämpar
+	 * den regeln på hela kedjan av omdirigeringar efter formuläret. Leder målet
+	 * vidare till en annan värd, som när Beaver Builder AI kopplas och wp-admin
+	 * skickar vidare till deras inloggningsserver, stoppas kedjan och personen
+	 * blir stående på reläets sida. En sida som själv går vidare börjar en ny
+	 * navigering, och då gäller reläets regel inte längre.
+	 *
+	 * @param string $url Adress på den egna sajten, redan kontrollerad med wp_validate_redirect().
+	 */
+	private static function continue_to( $url ) {
+		nocache_headers();
+		header( 'Content-Type: text/html; charset=utf-8' );
+		header( 'Referrer-Policy: no-referrer' );
+		header( 'X-Robots-Tag: noindex' );
+		printf(
+			'<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=%1$s"><title>%2$s</title></head><body><p><a href="%1$s">%3$s</a></p></body></html>',
+			esc_url( $url ),
+			esc_html__( 'Loggar in …', 'rco-sso' ),
+			esc_html__( 'Fortsätt', 'rco-sso' )
+		);
 		exit;
 	}
 
