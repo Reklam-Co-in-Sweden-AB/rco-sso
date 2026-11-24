@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Reklam & Co SSO
  * Description: Inloggning med Microsoft Entra ID för Reklam & Co-personal, utan nycklar på sajten. Microsoft signerar, sso.reklamco.se skickar vidare och pluginet kontrollerar.
- * Version: 0.7.5
+ * Version: 0.7.6
  * Requires PHP: 7.4
  * Author: Reklam & Co
  * Update URI: https://github.com/Reklam-Co-in-Sweden-AB/rco-sso
@@ -45,7 +45,7 @@ defined( 'RCO_SSO_BLOCKLIST_URL' ) || define( 'RCO_SSO_BLOCKLIST_URL', 'https://
 /**
  * Version och fil, för uppdateraren.
  */
-const RCO_SSO_VERSION = '0.7.5';
+const RCO_SSO_VERSION = '0.7.6';
 const RCO_SSO_FILE    = __FILE__;
 
 /*

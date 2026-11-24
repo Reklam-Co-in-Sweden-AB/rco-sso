@@ -66,6 +66,10 @@ class RCO_SSO_Login {
 			self::fail( 'manual', 'start från en annan webbplats (' . sanitize_key( $fetch_site ) . ')' );
 		}
 
+		if ( ! self::is_at_host_root() ) {
+			self::fail( 'invalid', 'installationen ligger inte i värdnamnets rot' );
+		}
+
 		// Cookien bär hemligheten. state bär hashen av den, och nonce binder ihop
 		// hashen med sajtens värdnamn. Microsoft signerar nonce, så en token kan
 		// bara användas på den sajt där inloggningen startade, och reläet skickar
@@ -109,6 +113,13 @@ class RCO_SSO_Login {
 		// phpcs:disable WordPress.Security.NonceVerification.Missing -- skyddet är nonce i token, bunden till cookien och sajten.
 		if ( 'POST' !== ( isset( $_SERVER['REQUEST_METHOD'] ) ? $_SERVER['REQUEST_METHOD'] : '' ) || empty( $_POST['id_token'] ) || empty( $_POST['state'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 			self::fail( 'invalid', 'id_token eller state saknas' );
+		}
+
+		// Token är bunden till värdnamnet och cookien, och cookien delas av allt
+		// på värdnamnet. Därför tar bara installationen i roten emot inloggningar,
+		// se is_at_host_root().
+		if ( ! self::is_at_host_root() ) {
+			self::fail( 'invalid', 'installationen ligger inte i värdnamnets rot' );
 		}
 
 		// Nonce-cookien läses och tas bort direkt, oavsett hur det går.
@@ -318,6 +329,22 @@ class RCO_SSO_Login {
 	 */
 	public static function own_host() {
 		return strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
+	}
+
+	/**
+	 * Ligger WordPress i värdnamnets rot?
+	 *
+	 * Reläet skickar alltid token till https://<värdnamn>/wp-login.php, så det
+	 * är bara där en inloggning kan sluta. En installation i en undermapp på
+	 * samma värdnamn delar inloggningens cookie med den i roten (__Host- kräver
+	 * Path=/). Utan den här kontrollen kunde den som styr den ena sajten läsa
+	 * cookien och token och återanvända dem på den andra inom tio minuter.
+	 * En sajt per värdnamn är därför ett krav.
+	 *
+	 * @return bool
+	 */
+	public static function is_at_host_root() {
+		return '' === trim( (string) wp_parse_url( site_url(), PHP_URL_PATH ), '/' );
 	}
 
 	/**

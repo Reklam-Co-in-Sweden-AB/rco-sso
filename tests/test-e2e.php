@@ -268,6 +268,63 @@ $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $kund
 ok( 403 === $r['status'] && false !== strpos( $r['body'], 'rco_sso_personal_account_required' ), 'BB-token för kundens administratör nekas', $r['status'] . ' ' . substr( $r['body'], 0, 120 ) );
 $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $kund->ID, 'https://bb-mcp-connect.info-288.workers.dev' ) );
 ok( 403 === $r['status'] && false !== strpos( $r['body'], 'rco_sso_personal_account_required' ), 'BB-token från den äldre utfärdaren nekas också för kundens administratör', $r['status'] . ' ' . substr( $r['body'], 0, 120 ) );
+// Avvikande kodning. Beaver Builder läser token med firebase/php-jwt, som godtar
+// utfyllnad, vanlig base64 och skräptecken, och tvättar headern med
+// sanitize_text_field. Spärren ska känna igen samma token (granskning 2026-11-24).
+function bb_token_kodad( $wp_user_id, $variant ) {
+	global $key;
+	$h = RCO_SSO_Token::b64url_encode( json_encode( array( 'alg' => 'RS256', 'kid' => 'bb' ) ) );
+	for ( $i = 0; $i < 3; $i++ ) {
+		// Fyllnaden ger både "+" och "/" i vanlig base64, och till slut utfyllnad.
+		$json = json_encode( array( 'iss' => 'https://connect.wpbeaverbuilder.com', 'aud' => 'http://127.0.0.1:8099', 'wp_user_id' => $wp_user_id, 'exp' => time() + 600, 'x' => str_repeat( ' ', $i ) . '???>>>???>>>' ) );
+		if ( '=' === substr( base64_encode( $json ), -1 ) ) {
+			break;
+		}
+	}
+	$std = base64_encode( $json );
+	$url = RCO_SSO_Token::b64url_encode( $json );
+	switch ( $variant ) {
+		case 'utfyllnad':
+			$b = strtr( $std, '+/', '-_' );
+			break;
+		case 'vanlig base64':
+			$b = rtrim( $std, '=' );
+			break;
+		case 'skräptecken':
+			$b = substr( $url, 0, 10 ) . '!' . substr( $url, 10 );
+			break;
+		case 'html-tagg':
+			$b = '<a.b.c>' . $url;
+			break;
+		default:
+			$b = $url;
+	}
+	openssl_sign( "$h.$b", $sig, $key, OPENSSL_ALGO_SHA256 );
+	return 'Bearer ' . "$h.$b." . RCO_SSO_Token::b64url_encode( $sig );
+}
+$spara_auth = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+foreach ( array( 'utfyllnad', 'vanlig base64', 'skräptecken', 'html-tagg' ) as $variant ) {
+	$bearer = bb_token_kodad( $kund->ID, $variant );
+	ok( 'vanlig base64' !== $variant || ( false !== strpos( $bearer, '+' ) && false !== strpos( $bearer, '/' ) ), "provtoken ($variant) har den kodning som ska prövas" );
+	$_SERVER['HTTP_AUTHORIZATION'] = $bearer;
+	ok( true === rco_sso_is_beaver_builder_token(), "BB-token med avvikande kodning ($variant) känns igen" );
+	$r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), array( 'Authorization: ' . $bearer ) );
+	ok( 403 === $r['status'] && false !== strpos( $r['body'], 'rco_sso_personal_account_required' ), "BB-token med avvikande kodning ($variant) nekas för kundens administratör", $r['status'] . ' ' . substr( $r['body'], 0, 120 ) );
+}
+$_SERVER['HTTP_AUTHORIZATION'] = 'Bearer abc.!!!!.def';
+ok( true === rco_sso_is_beaver_builder_token(), 'token i tre delar som inte går att tolka räknas som Beaver Builders' );
+$annan = RCO_SSO_Token::b64url_encode( json_encode( array( 'iss' => 'https://annat-plugin.example', 'sub' => '7' ) ) );
+$_SERVER['HTTP_AUTHORIZATION'] = "Bearer aaaa.$annan.bbbb";
+ok( false === rco_sso_is_beaver_builder_token(), 'ett annat plugins token räknas inte som Beaver Builders' );
+$_SERVER['HTTP_AUTHORIZATION'] = 'Bearer enkelnyckelutanpunkter';
+ok( false === rco_sso_is_beaver_builder_token(), 'en nyckel som inte är i tre delar räknas inte som Beaver Builders' );
+$_SERVER['HTTP_AUTHORIZATION'] = 'Basic ' . base64_encode( 'kundadmin:xxxx xxxx' );
+ok( false === rco_sso_is_beaver_builder_token(), 'applikationslösenord (Basic) räknas inte som Beaver Builders' );
+if ( null === $spara_auth ) {
+	unset( $_SERVER['HTTP_AUTHORIZATION'] );
+} else {
+	$_SERVER['HTTP_AUTHORIZATION'] = $spara_auth;
+}
 update_user_meta( $uid, 'rco_sso_last_login', time() - 31 * DAY_IN_SECONDS );
 update_user_meta( $uid, 'rco_sso_linked', time() - 31 * DAY_IN_SECONDS );
 $r = http( 'GET', '/?rest_route=/wp/v2/users/me', null, array(), bb_token( $uid ) );
@@ -300,6 +357,15 @@ wp_set_current_user( 0 );
 list( $st ) = rest_status( '/wp/v2/users/' . $uid );
 list( , $lista ) = rest_status( '/wp/v2/users', array( 'per_page' => 100 ) );
 ok( 404 === $st && ! in_array( $uid, wp_list_pluck( (array) $lista, 'id' ), true ), 'utloggad får inte fram personalkontot i REST, trots publicerat inlägg', (string) $st );
+
+// Sitemappar: personalen ska inte listas, kundens författare ska vara kvar.
+$kundinlagg = wp_insert_post( array( 'post_title' => 'kundprov', 'post_status' => 'publish', 'post_author' => $kund->ID ) );
+$adresser   = wp_list_pluck( ( new WP_Sitemaps_Users() )->get_url_list( 1 ), 'loc' );
+ok( ! in_array( get_author_posts_url( $uid ), $adresser, true ), 'personal med publicerat inlägg står inte i WordPress sitemap över författare', implode( ' ', $adresser ) );
+ok( in_array( get_author_posts_url( $kund->ID ), $adresser, true ), 'kundens författare står kvar i sitemappen', implode( ' ', $adresser ) );
+$kvar = rco_sso_hide_staff_in_yoast_sitemap( array( get_userdata( $uid ), get_userdata( $kund->ID ) ) );
+ok( 1 === count( $kvar ) && $kund->ID === $kvar[0]->ID, 'Yoasts sitemap över författare får bara kundens konto' );
+wp_delete_post( $kundinlagg, true );
 wp_delete_post( $inlagg, true );
 
 $blocklist_file = getenv( 'BLOCKLIST_DIR' ) . '/sparrade.json';
@@ -550,6 +616,22 @@ foreach ( array( 'främmande värd' => 'https://evil.example/stjal', 'html i adr
 	$s0 = array( 'r' => $r0, 'q' => $q0, 'cookies' => array_intersect_key( $r0['cookies'], array( '__Host-rco_sso_c' => 1, '__Host-rco_sso_to' => 1 ) ) );
 	list( $r ) = callback( $s0, array( 'oid' => 'oid-vidare', 'preferred_username' => 'vidare@reklamco.se', 'roles' => array( 'wp.editor' ) ) );
 	ok( 200 === $r['status'] && false === strpos( $r['body'], 'evil.example' ) && false === stripos( $r['body'], '<script' ) && 1 === preg_match( '/content="0;url=http:\/\/127\.0\.0\.1:8099\/wp-admin\/[^"<>]*">/', $r['body'] ), "vidare efter inloggning ($vad) stannar på sajten", substr( $r['body'], 0, 300 ) );
+}
+
+// === 17. Bara installationen i värdnamnets rot tar emot inloggningar ===
+ok( true === RCO_SSO_Login::is_at_host_root(), 'testsajten ligger i värdnamnets rot' );
+$s17     = start();
+$siteurl = get_option( 'siteurl' );
+update_option( 'siteurl', $base . '/undermapp' );
+try {
+	ok( false === RCO_SSO_Login::is_at_host_root(), 'en installation i en undermapp räknas inte som roten' );
+	$r = http( 'GET', '/wp-login.php?action=rco_sso' );
+	ok( 'invalid' === error_code( $r ) && ! isset( $r['cookies']['__Host-rco_sso_c'] ), 'installation i undermapp startar ingen inloggning', $r['status'] . ' ' . $r['location'] );
+	list( $r ) = callback( $s17, array( 'oid' => 'oid-byran', 'preferred_username' => 'byran@reklamco.se', 'roles' => array( 'wp.editor' ) ) );
+	$inloggad  = array_filter( array_keys( $r['cookies'] ), function ( $namn ) { return 0 === strpos( $namn, 'wordpress_logged_in' ); } );
+	ok( 'invalid' === error_code( $r ) && ! $inloggad, 'installation i undermapp tar inte emot en token, inte ens en giltig', $r['status'] . ' ' . $r['location'] );
+} finally {
+	update_option( 'siteurl', $siteurl );
 }
 
 echo "\n" . ( $fail ? "$fail av $n tester misslyckades" : "Alla $n tester gick igenom" ) . "\n";

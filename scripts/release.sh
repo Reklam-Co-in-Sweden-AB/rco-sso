@@ -21,6 +21,7 @@ grep -q "const RCO_SSO_VERSION = '$VERSION';" rco-sso.php || { echo "RCO_SSO_VER
 if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then echo "v$VERSION finns redan." >&2; exit 1; fi
 
 php tests/test-token.php
+php tests/test-updater.php
 
 DIST=$(mktemp -d)
 git archive --format=zip --prefix=rco-sso/ -o "$DIST/rco-sso.zip" HEAD

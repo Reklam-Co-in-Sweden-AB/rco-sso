@@ -2,8 +2,9 @@
 /**
  * Plugin Name: Simulator för Beaver Builder AI:s molnkoppling (bara för test)
  *
- * Gör samma sak som BB AI 1.0.3 (packages/mcp-oauth) när en Bearer-token
- * kommer in: sätter användaren direkt med wp_set_current_user på två ställen
+ * Gör samma sak som BB AI 1.0.3–1.1.0 (packages/mcp-oauth) när en Bearer-token
+ * kommer in: tvättar headern med sanitize_text_field, avkodar tillåtande
+ * (som firebase/php-jwt) och sätter användaren direkt med wp_set_current_user på två ställen
  * som går förbi determine_current_user.
  *  - resolve_token_user_early: rest_api_init, prioritet 0
  *  - rest_bearer_auth_safety_net: rest_authentication_errors, prioritet 99
@@ -22,7 +23,7 @@ defined( 'ABSPATH' ) || exit;
  * @return int
  */
 function rco_test_bb_user_from_bearer() {
-	$header = isset( $_SERVER['HTTP_AUTHORIZATION'] ) ? (string) $_SERVER['HTTP_AUTHORIZATION'] : '';
+	$header = isset( $_SERVER['HTTP_AUTHORIZATION'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_AUTHORIZATION'] ) ) : '';
 	if ( 0 !== stripos( $header, 'Bearer ' ) ) {
 		return 0;
 	}

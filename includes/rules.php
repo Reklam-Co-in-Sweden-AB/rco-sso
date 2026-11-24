@@ -25,7 +25,7 @@ add_filter( 'authenticate', 'rco_sso_block_password_login', PHP_INT_MAX, 3 );
 add_filter( 'allow_password_reset', 'rco_sso_block_password_reset', 10, 2 );
 add_filter( 'lostpassword_user_data', 'rco_sso_hide_staff_from_lostpassword', 10, 1 );
 
-// 4c. Dölj personalkonton för uppräkning utifrån (author-arkiv och REST).
+// 4c. Dölj personalkonton för uppräkning utifrån (author-arkiv, REST och sitemappar).
 //     Personalens inloggningsnamn är adresser på @reklamco.se, och den publika
 //     spärrlistan har osaltade hashar av dem. Kan en utomstående räkna upp
 //     vilka anställda som finns på sajterna går det att lista ut vilka som är
@@ -33,6 +33,8 @@ add_filter( 'lostpassword_user_data', 'rco_sso_hide_staff_from_lostpassword', 10
 add_action( 'template_redirect', 'rco_sso_block_staff_author_enum', 0 );
 add_filter( 'rest_user_query', 'rco_sso_hide_staff_in_rest', 10, 2 );
 add_filter( 'rest_prepare_user', 'rco_sso_block_single_staff_in_rest', 10, 3 );
+add_filter( 'wp_sitemaps_users_query_args', 'rco_sso_hide_staff_in_sitemap' );
+add_filter( 'wpseo_sitemap_exclude_author', 'rco_sso_hide_staff_in_yoast_sitemap' );
 
 /**
  * Stoppa lösenordsinloggning för personalkonton.
@@ -214,6 +216,46 @@ function rco_sso_block_single_staff_in_rest( $response, $user, $request ) {
 	return $response;
 }
 
+/**
+ * Uteslut personalkonton ur WordPress egen sitemap över författare
+ * (/wp-sitemap-users-1.xml). Den pekar på author-arkiven, där adressen är
+ * inloggningsnamnet, och de arkiven ger ändå 404 för personal.
+ *
+ * @param array $args Argument till WP_User_Query.
+ * @return array
+ */
+function rco_sso_hide_staff_in_sitemap( $args ) {
+	if ( ! rco_sso_is_configured() ) {
+		return $args;
+	}
+	$staff = rco_sso_staff_user_ids();
+	if ( $staff ) {
+		$args['exclude'] = array_merge( isset( $args['exclude'] ) ? (array) $args['exclude'] : array(), $staff );
+	}
+	return $args;
+}
+
+/**
+ * Samma sak för Yoast SEO, som ersätter WordPress sitemap med sin egen
+ * (/author-sitemap.xml).
+ *
+ * @param array $users Konton som Yoast tänker ta med.
+ * @return array
+ */
+function rco_sso_hide_staff_in_yoast_sitemap( $users ) {
+	if ( ! rco_sso_is_configured() || ! is_array( $users ) ) {
+		return $users;
+	}
+	return array_values(
+		array_filter(
+			$users,
+			static function ( $user ) {
+				return ! rco_sso_is_staff_user( $user );
+			}
+		)
+	);
+}
+
 /*
  * 4b. API-åtkomst kräver en färsk SSO-inloggning
  *
@@ -343,26 +385,36 @@ add_filter( 'rest_pre_dispatch', 'rco_sso_gate_rest_request', 1 );
  * Är anropet autentiserat med en token från Beaver Builder AI?
  *
  * Känns igen på fältet wp_user_id, som Beaver Builder kräver i varje token,
- * eller på utfärdaren. Bara utfärdarens domän räcker inte: BB AI 1.0.3 godtar
+ * eller på utfärdaren. Bara utfärdarens domän räcker inte: BB AI godtar
  * även en äldre utfärdare på en annan domän (bb-mcp-connect.info-288.workers.dev).
  * Token läses utan att signaturen kontrolleras. Det räcker här: svaret används
  * bara för att neka, och en förfalskad token släpps ändå inte in av Beaver Builder.
  *
+ * Headern och token läses på samma sätt som Beaver Builder gör (kontrollerat
+ * i BB AI 1.1.0: sanitize_text_field på headern, och firebase/php-jwt som
+ * avkodar base64 tillåtande, med utfyllnad, "+/" och skräptecken). Annars kan
+ * den som har kapat Beaver Builders server koda sin token så att den godtas
+ * där men inte känns igen här. En token i tre delar som ändå inte går att
+ * tolka räknas som Beaver Builders, så att ett framtida glapp nekar i stället
+ * för att släppa igenom.
+ *
  * @return bool
  */
 function rco_sso_is_beaver_builder_token() {
-	// Samma källor, i samma ordning, som Beaver Builder AI läser headern från.
+	// Samma källor, i samma ordning och med samma tvätt, som Beaver Builder AI.
 	$header = '';
 	foreach ( array( 'HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION' ) as $key ) {
-		if ( ! empty( $_SERVER[ $key ] ) && '' !== trim( (string) $_SERVER[ $key ] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-			$header = (string) wp_unslash( $_SERVER[ $key ] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$candidate = isset( $_SERVER[ $key ] ) ? sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) ) : '';
+		if ( '' !== trim( $candidate ) ) {
+			$header = $candidate;
 			break;
 		}
 	}
 	if ( '' === $header && function_exists( 'apache_request_headers' ) ) {
 		foreach ( (array) apache_request_headers() as $name => $value ) {
-			if ( 'authorization' === strtolower( (string) $name ) ) {
-				$header = (string) $value;
+			$candidate = 'authorization' === strtolower( (string) $name ) ? sanitize_text_field( (string) $value ) : '';
+			if ( '' !== trim( $candidate ) ) {
+				$header = $candidate;
 				break;
 			}
 		}
@@ -371,10 +423,17 @@ function rco_sso_is_beaver_builder_token() {
 		return false;
 	}
 
-	$parts   = explode( '.', trim( substr( $header, 7 ) ) );
-	$payload = 3 === count( $parts ) ? json_decode( RCO_SSO_Token::b64url_decode( $parts[1] ), true ) : null;
-	if ( ! is_array( $payload ) ) {
+	$parts = explode( '.', trim( substr( $header, 7 ) ) );
+	if ( 3 !== count( $parts ) ) {
+		// Beaver Builder nekar allt som inte har tre delar.
 		return false;
+	}
+
+	// Tillåtande avkodning, som JWT::urlsafeB64Decode i firebase/php-jwt.
+	$body    = $parts[1] . str_repeat( '=', ( 4 - strlen( $parts[1] ) % 4 ) % 4 );
+	$payload = json_decode( (string) base64_decode( strtr( $body, '-_', '+/' ) ), true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
+	if ( ! is_array( $payload ) ) {
+		return true;
 	}
 	if ( isset( $payload['wp_user_id'] ) ) {
 		return true;

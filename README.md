@@ -1,4 +1,4 @@
-# Reklam & Co SSO 0.7.5
+# Reklam & Co SSO 0.7.6
 
 Plugin som låter Reklam & Co-personal logga in på kundsajter med Microsoft Entra ID, utan någon nyckel eller hemlighet på sajten. Microsoft signerar inloggningen, `sso.reklamco.se` (CoWeb) skickar den vidare och pluginet kontrollerar Microsofts signatur själv.
 
@@ -16,11 +16,11 @@ Bakgrund, beslut och designspec finns i det interna repot `rco-sso-docs`.
 | Första kopplingen | Lösenordet slumpas om och alla öppna sessioner avslutas. |
 | Lösenord | Personalkonton kan inte logga in med lösenord eller återställa lösenord. |
 | API-åtkomst (MCP) | Applikationslösenord och andra kopplingar utan webbläsarsession gäller bara om kontot har loggat in via SSO de senaste 30 dagarna. |
-| Beaver Builder AI | Molnkopplingens token (känns igen på fältet `wp_user_id` eller utfärdaren) godtas bara för konton som är kopplade till SSO och har loggat in de senaste 30 dagarna. Kontrollen ligger i `rest_pre_dispatch`, eftersom Beaver Builder sätter användaren på vägar som går förbi `determine_current_user`. Kundens konton och byråkontot kan inte användas med molnkopplingen. |
+| Beaver Builder AI | Molnkopplingens token (känns igen på fältet `wp_user_id` eller utfärdaren) godtas bara för konton som är kopplade till SSO och har loggat in de senaste 30 dagarna. Kontrollen ligger i `rest_pre_dispatch`, eftersom Beaver Builder sätter användaren på vägar som går förbi `determine_current_user`. Kundens konton och byråkontot kan inte användas med molnkopplingen. Headern och token läses på samma tillåtande sätt som Beaver Builder gör (kontrollerat mot BB AI 1.1.0), och en token i tre delar som inte går att tolka räknas som Beaver Builders. |
 | Applikationslösenord | Personliga konton som är kopplade till SSO får bara använda applikationslösenord på sajter som är markerade som utvecklingssajt i CoWebs register (Inställningar → Sajter), eller när `WP_ENVIRONMENT_TYPE` är `local`. Domänen avgör inte (`hemsida.eu` delas av alla Oderlands kunder), och `development`/`staging` räcker inte eftersom konstanten följer med till produktion. Vid lansering byter sajten domän och stängs automatiskt. Utan lista gäller produktionsreglerna. Byråkontot och kundens konton påverkas inte. |
 | Spärrlista | Inloggning kräver att listan har kunnat hämtas minst en gång. Personer som CoWeb har spärrat (`https://sso.reklamco.se/api/wp-sso/sparrade`) förlorar roll, applikationslösenord och sessioner vid nästa API-anrop, inloggning eller sidvisning, och kan inte logga in. Listan innehåller bara hashar av `oid` och UPN, men de är osaltade och går att räkna fram för den som har en lista över personalens namn. Den cachas i fem minuter. Spärrarna kan bara neka; markeringen av utvecklingssajter öppnar för applikationslösenord. Går den inte att hämta gäller den senast hämtade. Rollen kommer tillbaka vid nästa inloggning när spärren tagits bort. Gäller bara SSO-kopplade konton. |
 | Sessioner | Personal loggas ut efter 10 timmar. |
-| Uppräkningsskydd | Personalens konton göms från author-arkiv och från REST för utloggade och konton som inte får redigera inlägg. Fel lösenord och "Glömt lösenord" svarar för ett personalkonto som för ett konto som inte finns. Kundens egna konton rörs inte. Svarstiden kan fortfarande skilja ett befintligt konto från ett okänt, som i WordPress i övrigt. |
+| Uppräkningsskydd | Personalens konton göms från author-arkiv, från sitemappen över författare (WordPress egen och Yoasts) och från REST för utloggade och konton som inte får redigera inlägg. Fel lösenord och "Glömt lösenord" svarar för ett personalkonto som för ett konto som inte finns. Kundens egna konton rörs inte. Svarstiden kan fortfarande skilja ett befintligt konto från ett okänt, som i WordPress i övrigt. |
 | Uppdateringar | Nya versioner hämtas från releaserna i det här repot och installeras bara om releasen är signerad med byråns signeringsnyckel (Ed25519). Det som signeras är `rco-sso|<version>|<sha256 av zip>`, så en gammal zip kan inte publiceras som en ny version. Den publika nyckeln står i `RCO_SSO_RELEASE_PUBLIC_KEY`. Saknas den installeras inga uppdateringar alls. Saknar servern PHP-tillägget sodium används WordPress eget bibliotek för kontrollen (från 0.7.2). |
 
 Kundernas användare påverkas inte. Pluginet skriver aldrig ut något i sidinnehållet, så Beaver Builder och Gutenberg påverkas inte.
@@ -30,7 +30,7 @@ Från 0.7.1 står tenant-id och client-id för appregistreringen "Reklam och Co 
 ## Installation på en sajt
 
 1. Ta en databasbackup.
-2. Lägg in sajten i CoWebs register (`coweb.wp_sites`). Värdnamnet ska vara exakt det som står i sajtens `home_url`, med eller utan `www`.
+2. Lägg in sajten i CoWebs register (`coweb.wp_sites`). Värdnamnet ska vara exakt det som står i sajtens `home_url`, med eller utan `www`. En sajt per värdnamn: WordPress ska ligga i värdnamnets rot. En installation i en undermapp (`kund.se/blogg`) tar inte emot inloggningar, eftersom den delar inloggningens cookie med sajten i roten.
 3. Skapa ett nödkonto med en adress utanför `@reklamco.se` och lägg lösenordet i byråns lösenordshanterare. Gör det före aktiveringen: när pluginet är aktivt kan konton med `@reklamco.se`-adress inte längre logga in med lösenord.
 4. Installera pluginet i `wp-content/plugins/rco-sso/` via WP Toolkit och aktivera det.
 5. Logga in med knappen och kontrollera att rätt roll sätts.
