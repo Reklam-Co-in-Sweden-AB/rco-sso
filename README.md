@@ -31,7 +31,11 @@ Från 0.7.1 står tenant-id och client-id för appregistreringen "Reklam och Co 
 
 1. Ta en databasbackup.
 2. Lägg in sajten i CoWebs register (`coweb.wp_sites`). Värdnamnet ska vara exakt det som står i sajtens `home_url`, med eller utan `www`. En sajt per värdnamn: WordPress ska ligga i värdnamnets rot. En installation i en undermapp (`kund.se/blogg`) tar inte emot inloggningar, eftersom den delar inloggningens cookie med sajten i roten.
-3. Skapa ett nödkonto med en adress utanför `@reklamco.se` och lägg lösenordet i byråns lösenordshanterare. Gör det före aktiveringen: när pluginet är aktivt kan konton med `@reklamco.se`-adress inte längre logga in med lösenord.
+3. Se till att sajten har ett nödkonto: ett adminkonto med en adress utanför `@reklamco.se`. Gör det före aktiveringen: när pluginet är aktivt kan konton med `@reklamco.se`-adress inte längre logga in med lösenord.
+   - Nödkontot ska vara det konto som WP Toolkit loggar in som. Vilket det är står under Setup på sajtens kort i WP Toolkit. På en sajt som installerats via WP Toolkit är det kontot som skapades vid installationen.
+   - Sätt ett långt slumpat lösenord och spara det inte. Vägen in är WP Toolkits inloggningsknapp, som inte behöver lösenordet.
+   - Adressen ska vara en där ingen obehörig kan återställa lösenordet: en brevlåda som inte finns, eller en som ni vet vem som läser. En adress på sajtens domän går bra.
+   - På en sajt utanför våra servrar finns ingen WP Toolkit. Där läggs lösenordet i byråns lösenordshanterare.
 4. Installera pluginet i `wp-content/plugins/rco-sso/` via WP Toolkit och aktivera det. Aktiveringen loggar ut alla konton med `@reklamco.se`-adress, även ditt eget om du är inloggad med ett sådant.
 5. Logga in med knappen och kontrollera att rätt roll sätts.
 6. Gå igenom sajtens användare. Ta bort gamla delade byråkonton. Går ett konto inte att ta bort än ska det ha en `@reklamco.se`-adress: då kan det varken logga in med lösenord eller använda applikationslösenord. Konton med andra adresser går förbi SSO.
@@ -70,7 +74,7 @@ Sajterna ser uppdateringen inom sex timmar.
 
 ## Nödläge
 
-- **Entra eller CoWeb ligger nere:** logga in med nödkontot eller med WP Toolkits inloggningsknapp.
+- **Entra eller CoWeb ligger nere:** logga in med WP Toolkits inloggningsknapp. Den loggar in som nödkontot och går inte via Microsoft (provat med pluginet aktivt 24 november 2026). På en sajt utanför våra servrar: logga in med nödkontots lösenord.
 - **Pluginet krånglar:** `define( 'RCO_SSO_DISABLE', true );` i `wp-config.php` stänger av allt och öppnar lösenordsinloggningen igen. Ta bort raden när felet är löst.
 
 ## Test
