@@ -398,7 +398,24 @@ set_blocklist( null );
 delete_option( RCO_SSO_Blocklist::LAST_OPTION );
 ok( false === rco_sso_staff_app_passwords( true, $personlig, 'production' ), 'personligt konto: ingen lista alls ger produktionsregler' );
 set_blocklist( array() );
-ok( true === rco_sso_staff_app_passwords( true, $byra, 'production' ), 'byråkontot (ej SSO-kopplat) påverkas inte' );
+ok( '' === (string) get_user_meta( $byra->ID, 'rco_sso_oid', true ), 'byråkontot i testet är inte kopplat till SSO' );
+ok( false === rco_sso_staff_app_passwords( true, $byra, 'production' ), 'byråkontot (personaladress, ej SSO-kopplat): inga applikationslösenord i produktion' );
+ok( true === rco_sso_staff_app_passwords( true, $byra, 'local' ), 'byråkontot: applikationslösenord tillåts lokalt' );
+set_blocklist( array(), array( RCO_SSO_Blocklist::hash( 'host', RCO_SSO_Login::own_host() ) ) );
+ok( true === rco_sso_staff_app_passwords( true, $byra, 'production' ), 'byråkontot: tillåts på utvecklingssajt i registret' );
+set_blocklist( array() );
+
+// Aktiveringen avslutar personalens gamla sessioner, även för okopplade konton.
+WP_Session_Tokens::get_instance( $byra->ID )->create( time() + 14 * DAY_IN_SECONDS );
+WP_Session_Tokens::get_instance( $personlig->ID )->create( time() + 14 * DAY_IN_SECONDS );
+WP_Session_Tokens::get_instance( $kund->ID )->create( time() + 14 * DAY_IN_SECONDS );
+ok( 0 < count( WP_Session_Tokens::get_instance( $byra->ID )->get_all() ), 'byråkontot har en gammal session före aktiveringen' );
+rco_sso_activate();
+ok( 0 === count( WP_Session_Tokens::get_instance( $byra->ID )->get_all() ), 'aktivering avslutar sessioner för okopplat personalkonto' );
+ok( 0 === count( WP_Session_Tokens::get_instance( $personlig->ID )->get_all() ), 'aktivering avslutar sessioner för kopplat personalkonto' );
+ok( 0 < count( WP_Session_Tokens::get_instance( $kund->ID )->get_all() ), 'aktivering rör inte kundens sessioner' );
+WP_Session_Tokens::get_instance( $kund->ID )->destroy_all();
+ok( false !== has_action( 'activate_' . plugin_basename( RCO_SSO_FILE ), 'rco_sso_activate' ), 'aktiveringskroken är registrerad' );
 ok( true === rco_sso_staff_app_passwords( true, $kund, 'production' ), 'kundens konto påverkas inte' );
 
 // === 13d. Spärrlistan (serveras från BLOCKLIST_DIR på port 8098) ===

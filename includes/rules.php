@@ -264,8 +264,10 @@ function rco_sso_hide_staff_in_yoast_sitemap( $users ) {
  * Därför gäller de bara om kontot har loggat in via SSO de senaste
  * RCO_SSO_API_MAX_DAYS dagarna.
  *
- * Regeln gäller bara konton som har kopplats till SSO. Byråkontot och
- * kundens konton påverkas inte, så befintliga integrationer fortsätter fungera.
+ * Regeln gäller bara konton som har kopplats till SSO. Kundens konton
+ * påverkas inte, så kundens integrationer fortsätter fungera. Okopplade
+ * personalkonton (till exempel ett delat byråkonto) får inte använda
+ * applikationslösenord alls på driftade sajter, se 4d.
  *
  * Inloggade webbläsarsessioner berörs inte: de är högst
  * RCO_SSO_SESSION_HOURS timmar gamla, eller skapade via WP Toolkit (nödvägen).
@@ -585,7 +587,7 @@ function rco_sso_profile_errors( $errors, $update, $user ) {
 }
 
 /*
- * 4d. Inga applikationslösenord för personliga konton på driftade sajter
+ * 4d. Inga applikationslösenord för personalkonton på driftade sajter
  *
  * Personalen kopplar MCP via Beaver Builder AI:s molnkoppling, som bygger på
  * inloggning och inte på ett lösenord som personen bär med sig. Den manuella
@@ -596,6 +598,12 @@ function rco_sso_profile_errors( $errors, $update, $user ) {
  * development/staging räcker inte eftersom konstanten följer med till
  * produktion. Vid lansering byter sajten domän och stängs då automatiskt.
  * Gäller både nya och befintliga lösenord.
+ *
+ * Gäller alla personalkonton, även de som inte är kopplade till SSO. Ett
+ * delat byråkonto med @reklamco.se-adress står utanför 30-dagarsregeln och
+ * spärrlistan, så ett applikationslösenord på det vore en nyckel utan
+ * tidsgräns som vem som helst med adminroll kan skapa och som finns kvar när
+ * personen har slutat (granskning 2026-11-24). Kundens konton påverkas inte.
  */
 add_filter( 'wp_is_application_passwords_available_for_user', 'rco_sso_staff_app_passwords', 10, 2 );
 
@@ -608,9 +616,8 @@ add_filter( 'wp_is_application_passwords_available_for_user', 'rco_sso_staff_app
  * @return bool
  */
 function rco_sso_staff_app_passwords( $available, $user, $env = null ) {
-	// Bara personliga konton som är kopplade till SSO. Byråkontot och kundens
-	// konton påverkas inte, samma avgränsning som 30-dagarsregeln.
-	if ( ! $available || ! rco_sso_is_configured() || ! $user instanceof WP_User || ! get_user_meta( $user->ID, 'rco_sso_oid', true ) ) {
+	// Alla personalkonton, kopplade eller inte. Kundens konton påverkas inte.
+	if ( ! $available || ! rco_sso_is_configured() || ! $user instanceof WP_User || ! rco_sso_is_staff_user( $user ) ) {
 		return $available;
 	}
 

@@ -130,6 +130,26 @@ require_once __DIR__ . '/includes/class-rco-sso-login.php';
 require_once __DIR__ . '/includes/rules.php';
 require_once __DIR__ . '/includes/class-rco-sso-updater.php';
 
+register_activation_hook( __FILE__, 'rco_sso_activate' );
+
+/**
+ * Vid aktivering: avsluta alla inloggade sessioner för personalkonton.
+ *
+ * En session som fanns före aktiveringen lever annars kvar i upp till 14
+ * dagar, utan sessionsgränsen på RCO_SSO_SESSION_HOURS. Ett okopplat
+ * personalkonto kunde under den tiden byta e-postadress och sätta ett eget
+ * lösenord, och på så sätt gå förbi SSO. Efter aktiveringen loggar personalen
+ * in med knappen. Kundens konton rörs inte.
+ */
+function rco_sso_activate() {
+	if ( ! rco_sso_is_configured() ) {
+		return;
+	}
+	foreach ( rco_sso_staff_user_ids() as $user_id ) {
+		WP_Session_Tokens::get_instance( $user_id )->destroy_all();
+	}
+}
+
 // Uppdateringar fungerar även innan SSO är konfigurerat.
 RCO_SSO_Updater::init();
 
